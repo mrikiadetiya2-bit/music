@@ -9,7 +9,11 @@ import {
   filterTracksByGenreAndQuery,
   generateProceduralWavBlob,
   computeAudioSeekTime,
+  normalizeTrackCacheKey,
   getNextTrackIndex,
+  detectTrackLanguage,
+  getTrendingSeedArtistsForTrack,
+  buildImmediateSimilarQueue,
 } from './musicLogic';
 import { Track } from '../types/music';
 
@@ -84,10 +88,17 @@ test('generateProceduralWavBlob creates a valid audio/wav Blob', () => {
   assert.ok(blob.size > 44);
 });
 
-test('computeAudioSeekTime never clamps near the end of short preview buffers and getNextTrackIndex advances from actual current track', () => {
-  // Seeking to 120s on a 30s preview buffer wraps safely without hitting 29.5s
-  const mapped = computeAudioSeekTime(120, 30);
-  assert.ok(mapped >= 0 && mapped < 28);
+test('computeAudioSeekTime clamps cleanly without modulo-looping and normalizeTrackCacheKey unifies metadata keys', () => {
+  assert.equal(computeAudioSeekTime(95, 240), 95);
+  assert.equal(computeAudioSeekTime(260, 240), 239.5);
+  assert.equal(
+    normalizeTrackCacheKey('Die With A Smile (Official Video)', 'Lady Gaga & Bruno Mars'),
+    normalizeTrackCacheKey('Die With A Smile', 'Lady Gaga, Bruno Mars')
+  );
+  assert.equal(
+    normalizeTrackCacheKey('Until I Found You (with Em Beihold)', 'Stephen Sanchez & Em Beihold'),
+    'until i found you|stephen sanchez'
+  );
 
   const q: Track[] = [
     { id: 't1', title: 'A', artist: 'A', album: 'A', duration: 200, coverUrl: '', genre: 'Pop', lyrics: [] },
@@ -96,5 +107,89 @@ test('computeAudioSeekTime never clamps near the end of short preview buffers an
   ];
   assert.equal(getNextTrackIndex(q, 't2'), 2);
   assert.equal(getNextTrackIndex(q, 't3'), 0);
+});
+
+test('detectTrackLanguage and getTrendingSeedArtistsForTrack match same language and genre', () => {
+  const indoTrack = {
+    title: 'Hati-Hati di Jalan',
+    artist: 'Tulus',
+    album: 'Manusia',
+    genre: 'Pop' as const,
+  };
+  assert.equal(detectTrackLanguage(indoTrack), 'id');
+  const indoSeeds = getTrendingSeedArtistsForTrack(indoTrack);
+  assert.ok(indoSeeds.includes('Mahalini') || indoSeeds.includes('Juicy Luicy'));
+  assert.ok(!indoSeeds.includes('Tulus'));
+
+  const kpopTrack = {
+    title: 'Magnetic',
+    artist: 'ILLIT',
+    album: 'SUPER REAL ME',
+    genre: 'K-Pop' as const,
+  };
+  assert.equal(detectTrackLanguage(kpopTrack), 'ko');
+  const kpopSeeds = getTrendingSeedArtistsForTrack(kpopTrack);
+  assert.ok(kpopSeeds.includes('NewJeans') || kpopSeeds.includes('aespa'));
+
+  const enTrack = {
+    title: 'Die With A Smile',
+    artist: 'Lady Gaga, Bruno Mars',
+    album: 'Die With A Smile',
+    genre: 'Pop' as const,
+  };
+  assert.equal(detectTrackLanguage(enTrack), 'en');
+  const enSeeds = getTrendingSeedArtistsForTrack(enTrack);
+  assert.ok(enSeeds.includes('Sabrina Carpenter') || enSeeds.includes('Billie Eilish'));
+});
+
+test('buildImmediateSimilarQueue prioritizes tracks with same language and genre from varied artists', () => {
+  const seed: Track = {
+    id: 'seed-id',
+    title: 'Sial',
+    artist: 'Mahalini',
+    album: 'Fabula',
+    duration: 243,
+    coverUrl: '',
+    genre: 'Pop',
+    lyrics: [],
+  };
+  const candidates: Track[] = [
+    {
+      id: 'en-pop',
+      title: 'Espresso',
+      artist: 'Sabrina Carpenter',
+      album: 'Short n Sweet',
+      duration: 175,
+      coverUrl: '',
+      genre: 'Pop',
+      lyrics: [],
+    },
+    {
+      id: 'id-indie',
+      title: 'Satu Bulan',
+      artist: 'Bernadya',
+      album: 'Sialnya',
+      duration: 261,
+      coverUrl: '',
+      genre: 'Indie',
+      lyrics: [],
+    },
+    {
+      id: 'id-pop',
+      title: 'Hati-Hati di Jalan',
+      artist: 'Tulus',
+      album: 'Manusia',
+      duration: 242,
+      coverUrl: '',
+      genre: 'Pop',
+      lyrics: [],
+    },
+  ];
+  const result = buildImmediateSimilarQueue(seed, candidates);
+  assert.equal(result[0].id, 'seed-id');
+  // Next track must be Indonesian Pop ('id-pop'), followed by Indonesian Indie ('id-indie'), then English Pop ('en-pop')
+  assert.equal(result[1].id, 'id-pop');
+  assert.equal(result[2].id, 'id-indie');
+  assert.equal(result[3].id, 'en-pop');
 });
 

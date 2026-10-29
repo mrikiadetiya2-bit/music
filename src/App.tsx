@@ -29,12 +29,14 @@ import {
   saveTrackOffline,
 } from './services/offlineDb';
 import {
+  fetchTrendingRadioQueue,
   getCachedFullLengthUrl,
   hydrateDefaultTracksAudio,
   isShortPreviewUrl,
   resolveFullLengthAudioUrl,
 } from './services/onlineApi';
 import {
+  buildImmediateSimilarQueue,
   computeAudioSeekTime,
   generateProceduralWavBlob,
   getNextTrackIndex,
@@ -108,7 +110,13 @@ export default function App() {
   const playRequestIdRef = useRef<number>(0);
   const currentTimeRef = useRef<number>(0);
   const durationRef = useRef<number>(INITIAL_TRACKS[0].duration);
+  const lastAudioTimeRef = useRef<number>(0);
   const handleNextTrackRef = useRef<() => void>(() => {});
+  const tracksRef = useRef<Track[]>(INITIAL_TRACKS);
+
+  useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
 
   useEffect(() => {
     currentTimeRef.current = currentTime;
@@ -162,19 +170,44 @@ export default function App() {
         });
       }
 
-      // Pre-load full-length audio URLs for default tracks
+      // Pre-load full-length audio URLs and fallback CDN previews for default tracks
       const hydrated = await hydrateDefaultTracksAudio(allCombined);
       if (mounted) {
-        const audioMap = new Map(hydrated.map((h) => [h.id, h.audioUrl]));
+        const hydratedMap = new Map(hydrated.map((h) => [h.id, h]));
         setTracks((prev) =>
-          prev.map((t) => (audioMap.get(t.id) ? { ...t, audioUrl: audioMap.get(t.id) } : t))
+          prev.map((t) => {
+            const h = hydratedMap.get(t.id);
+            return h
+              ? {
+                  ...t,
+                  audioUrl: h.audioUrl || t.audioUrl,
+                  fallbackPreviewUrl: h.fallbackPreviewUrl || t.fallbackPreviewUrl,
+                }
+              : t;
+          })
         );
         setQueue((prev) =>
-          prev.map((t) => (audioMap.get(t.id) ? { ...t, audioUrl: audioMap.get(t.id) } : t))
+          prev.map((t) => {
+            const h = hydratedMap.get(t.id);
+            return h
+              ? {
+                  ...t,
+                  audioUrl: h.audioUrl || t.audioUrl,
+                  fallbackPreviewUrl: h.fallbackPreviewUrl || t.fallbackPreviewUrl,
+                }
+              : t;
+          })
         );
-        setCurrentTrack((prev) =>
-          audioMap.get(prev.id) ? { ...prev, audioUrl: audioMap.get(prev.id) } : prev
-        );
+        setCurrentTrack((prev) => {
+          const h = hydratedMap.get(prev.id);
+          return h
+            ? {
+                ...prev,
+                audioUrl: h.audioUrl || prev.audioUrl,
+                fallbackPreviewUrl: h.fallbackPreviewUrl || prev.fallbackPreviewUrl,
+              }
+            : prev;
+        });
       }
     }
 
@@ -186,7 +219,7 @@ export default function App() {
 
   // Instant, zero-delay playback handler that unlocks mobile HTML5 Audio immediately on tap
   const loadAndPlayTrack = useCallback(
-    async (track: Track, autoPlay = true) => {
+    async (track: Track, autoPlay = true, fromSearch = false) => {
       const audio = audioRef.current;
       if (!audio) return;
 
@@ -195,6 +228,7 @@ export default function App() {
       // Immediately pause previous playback and reset timer to 0:00 (beginning of track)
       audio.pause();
       audio.currentTime = 0;
+      lastAudioTimeRef.current = 0;
       setCurrentTrack(track);
       const targetDuration = track.duration || 210;
       setDuration(targetDuration);
@@ -205,9 +239,30 @@ export default function App() {
       // Update Listening History
       setHistoryTracks((prev) => [track, ...prev.filter((t) => t.id !== track.id)].slice(0, 15));
 
-      // Add to tracks catalog & queue if from online search
+      // Add to tracks catalog
       setTracks((prev) => (prev.some((t) => t.id === track.id) ? prev : [track, ...prev]));
-      setQueue((prev) => (prev.some((t) => t.id === track.id) ? prev : [track, ...prev]));
+
+      if (fromSearch) {
+        // Immediately reorder queue to match the searched track's language & genre
+        setQueue((prev) => buildImmediateSimilarQueue(track, [...tracksRef.current, ...prev]));
+
+        // In the background, fetch varied trending songs of the exact same language & genre
+        if (navigator.onLine) {
+          fetchTrendingRadioQueue(track, tracksRef.current)
+            .then((trendingQueue) => {
+              if (requestId !== playRequestIdRef.current || trendingQueue.length === 0) return;
+              setQueue(trendingQueue);
+              setTracks((prev) => {
+                const existingIds = new Set(prev.map((t) => t.id));
+                const newTrending = trendingQueue.filter((t) => !existingIds.has(t.id));
+                return newTrending.length > 0 ? [...prev, ...newTrending] : prev;
+              });
+            })
+            .catch(() => {});
+        }
+      } else {
+        setQueue((prev) => (prev.some((t) => t.id === track.id) ? prev : [track, ...prev]));
+      }
 
       if (activeObjectUrlRef.current) {
         URL.revokeObjectURL(activeObjectUrlRef.current);
@@ -216,6 +271,7 @@ export default function App() {
 
       const playProceduralFallback = async () => {
         if (requestId !== playRequestIdRef.current) return;
+        audio.muted = false;
         const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
         const freqs = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0];
         const wavBlob = generateProceduralWavBlob(freqs[hash % freqs.length], 24);
@@ -223,6 +279,7 @@ export default function App() {
         activeObjectUrlRef.current = blobUrl;
         audio.src = blobUrl;
         audio.currentTime = 0;
+        lastAudioTimeRef.current = 0;
         if (autoPlay) {
           try {
             await audio.play();
@@ -238,10 +295,12 @@ export default function App() {
         const offlineRecord = await getOfflineTrackRecord(track.id);
         if (requestId !== playRequestIdRef.current) return;
         if (offlineRecord?.audioBlob) {
+          audio.muted = false;
           const blobUrl = URL.createObjectURL(offlineRecord.audioBlob);
           activeObjectUrlRef.current = blobUrl;
           audio.src = blobUrl;
           audio.currentTime = 0;
+          lastAudioTimeRef.current = 0;
           if (autoPlay) {
             try {
               await audio.play();
@@ -256,14 +315,56 @@ export default function App() {
         }
       }
 
-      // 2. Online Playback: Immediately start playing the fastest available URL within the user tap gesture!
+      // 2. Online Playback: Always prioritize full-length stream starting from 0:00 (beginning of song)
       if (navigator.onLine) {
         const cachedFull = getCachedFullLengthUrl(track.title, track.artist);
-        const immediateUrl = cachedFull || track.audioUrl || track.fallbackPreviewUrl;
+        const existingFull =
+          track.audioUrl && !isShortPreviewUrl(track.audioUrl) ? track.audioUrl : undefined;
+        let fullUrl = cachedFull || existingFull;
+        const previewFallback =
+          track.fallbackPreviewUrl ||
+          (track.audioUrl && isShortPreviewUrl(track.audioUrl) ? track.audioUrl : undefined);
 
-        if (immediateUrl) {
-          audio.src = immediateUrl;
+        // If we don't have the full-length stream cached yet, silently unlock mobile audio gesture
+        // while resolving the full-length stream (JioSaavn / Archive.org) so the song starts at 0:00 intro!
+        if (!fullUrl) {
+          if (autoPlay && previewFallback) {
+            try {
+              audio.muted = true;
+              audio.src = previewFallback;
+              audio.currentTime = 0;
+              audio.play().catch(() => {});
+            } catch {
+              // Ignore silent gesture primer errors
+            }
+          }
+
+          const resolved = await resolveFullLengthAudioUrl(track.title, track.artist);
+          if (requestId !== playRequestIdRef.current) {
+            audio.muted = false;
+            return;
+          }
+          if (resolved) {
+            fullUrl = resolved;
+            setTracks((prev) =>
+              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: resolved } : t))
+            );
+            setQueue((prev) =>
+              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: resolved } : t))
+            );
+            setCurrentTrack((prev) => (prev.id === track.id ? { ...prev, audioUrl: resolved } : prev));
+          }
+        }
+
+        audio.muted = false;
+        const primaryUrl = fullUrl || previewFallback;
+
+        if (primaryUrl) {
+          audio.src = primaryUrl;
           audio.currentTime = 0;
+          lastAudioTimeRef.current = 0;
+          setCurrentTime(0);
+          currentTimeRef.current = 0;
 
           if (autoPlay) {
             try {
@@ -271,17 +372,23 @@ export default function App() {
               if (requestId === playRequestIdRef.current) {
                 setIsPlaying(true);
               }
+              return;
             } catch {
               if (requestId !== playRequestIdRef.current) return;
-              // If primary URL failed, immediately try fallbackPreviewUrl before procedural WAV
-              if (track.fallbackPreviewUrl && immediateUrl !== track.fallbackPreviewUrl) {
+              // If primary full URL (e.g. archive.org) is blocked by mobile ISP, try fallbackPreviewUrl
+              if (previewFallback && primaryUrl !== previewFallback) {
                 try {
-                  audio.src = track.fallbackPreviewUrl;
+                  audio.muted = false;
+                  audio.src = previewFallback;
                   audio.currentTime = 0;
+                  lastAudioTimeRef.current = 0;
+                  setCurrentTime(0);
+                  currentTimeRef.current = 0;
                   await audio.play();
                   if (requestId === playRequestIdRef.current) {
                     setIsPlaying(true);
                   }
+                  return;
                 } catch {
                   await playProceduralFallback();
                   return;
@@ -291,21 +398,6 @@ export default function App() {
                 return;
               }
             }
-          }
-
-          // If immediateUrl was a short preview, cache the full-length stream in the background for next play/download without interrupting current playback!
-          if (isShortPreviewUrl(immediateUrl)) {
-            resolveFullLengthAudioUrl(track.title, track.artist)
-              .then((fullUrl) => {
-                if (!fullUrl) return;
-                setTracks((prev) =>
-                  prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullUrl } : t))
-                );
-                setQueue((prev) =>
-                  prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullUrl } : t))
-                );
-              })
-              .catch(() => {});
           }
           return;
         }
@@ -330,6 +422,7 @@ export default function App() {
         await loadAndPlayTrack(currentTrack, true);
       } else {
         try {
+          audio.muted = false;
           await audio.play();
           setIsPlaying(true);
         } catch {
@@ -367,6 +460,7 @@ export default function App() {
     if (queue.length === 0) return;
     if (currentTime > 5 && audioRef.current) {
       audioRef.current.currentTime = 0;
+      lastAudioTimeRef.current = 0;
       setCurrentTime(0);
       currentTimeRef.current = 0;
       return;
@@ -382,18 +476,23 @@ export default function App() {
     const audio = audioRef.current;
     if (audio && audio.src) {
       const safeAudioTime = computeAudioSeekTime(newTime, audio.duration);
+      lastAudioTimeRef.current = safeAudioTime;
       audio.currentTime = safeAudioTime;
     }
   }, []);
 
-  // Initialize HTML5 Audio Element once and bind currentTime and duration dynamically via events
+  // Initialize HTML5 Audio Element once and bind real playback position without looping short clips
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'auto';
     audioRef.current = audio;
 
     const handleTimeUpdate = () => {
+      if (audio.muted) return;
       const nowAudio = audio.currentTime;
+      if (!Number.isFinite(nowAudio) || nowAudio < 0) return;
+      lastAudioTimeRef.current = nowAudio;
+
       if (durationRef.current > 0 && nowAudio >= durationRef.current) {
         handleNextTrackRef.current();
         return;
@@ -403,10 +502,12 @@ export default function App() {
     };
 
     const handleLoadedMetadata = () => {
+      if (audio.muted) return;
       if (Number.isFinite(audio.duration) && audio.duration > 1) {
-        // Dynamically bind seekbar max duration to actual audio.duration for single-song streams
         const realDuration = Math.round(audio.duration);
-        if (realDuration >= 60 && realDuration <= 540) {
+        // Sync duration to actual playable stream length (single song or fallback stream),
+        // while keeping track.duration for multi-song album files (>540s) so they advance after the first song
+        if (realDuration >= 15 && realDuration <= 540) {
           durationRef.current = realDuration;
           setDuration(realDuration);
         }
@@ -414,6 +515,8 @@ export default function App() {
     };
 
     const handleEnded = () => {
+      if (audio.muted) return;
+      // Advance cleanly to the next song when the stream ends (never loop a short preview snippet over and over)
       handleNextTrackRef.current();
     };
 
@@ -737,7 +840,9 @@ export default function App() {
                     isPlaying={isPlaying}
                     selectedGenre={selectedGenre}
                     onSelectGenre={setSelectedGenre}
-                    onPlayTrack={(track) => loadAndPlayTrack(track, true)}
+                    onPlayTrack={(track, isFromSearch) =>
+                      loadAndPlayTrack(track, true, Boolean(isFromSearch))
+                    }
                     onOpenFullPlayer={() => setShowFullPlayer(true)}
                     onOpenPlaylist={(pl) => setSelectedPlaylist(pl)}
                     onOpenSearch={(q) => {
@@ -760,7 +865,7 @@ export default function App() {
                     isPlaying={isPlaying}
                     offlineTrackIds={offlineTrackIds}
                     downloadingTrackIds={downloadingTrackIds}
-                    onPlayTrack={(track) => loadAndPlayTrack(track, true)}
+                    onPlayTrack={(track) => loadAndPlayTrack(track, true, true)}
                     onDownloadTrack={handleDownloadOffline}
                     onOpenTrackMenu={(track) => setMenuTrack(track)}
                   />

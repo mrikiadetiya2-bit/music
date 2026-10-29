@@ -1,5 +1,11 @@
 import { LyricLine, Track } from '../types/music';
-import { parseLrcLyrics } from '../utils/musicLogic';
+import {
+  buildImmediateSimilarQueue,
+  detectTrackLanguage,
+  getTrendingSeedArtistsForTrack,
+  normalizeTrackCacheKey,
+  parseLrcLyrics,
+} from '../utils/musicLogic';
 import { ARTWORK } from '../data/catalog';
 
 interface ITunesResult {
@@ -48,8 +54,66 @@ const JIOSAAVN_API_URL = 'https://saavn.sumit.co/api/search/songs';
 // In-memory cache of resolved full-length stream URLs by normalized "title|artist"
 const resolvedStreamCache = new Map<string, string>();
 
+// Cache of Archive.org item metadata files to avoid redundant network calls for multi-track albums
+const archiveMetadataFilesCache = new Map<
+  string,
+  Array<{ name?: string; length?: string; size?: string }>
+>();
+
+// Known multi-track Archive.org album/playlist identifiers for popular Indonesian artists
+const KNOWN_ARCHIVE_ALBUM_SOURCES: Array<{ keywords: string[]; identifiers: string[] }> = [
+  {
+    keywords: ['hindia', 'feast', 'fourtwnty', 'lomba sihir', 'sal priadi'],
+    identifiers: ['feast-tarot-official-lyric-video'],
+  },
+  {
+    keywords: ['feby putri', 'juicy luicy', 'soegi bornean', 'diskoria'],
+    identifiers: ['runtuh-feby-putri-feat.-fiersa-besari'],
+  },
+  {
+    keywords: ['tulus'],
+    identifiers: ['maringngerrang-TulusAlbum'],
+  },
+  {
+    keywords: ['mahalini'],
+    identifiers: ['playlist-sedih-banget-lagu-2023', 'mahalini-album-mp3-full-album'],
+  },
+  {
+    keywords: ['sheila on 7', 'sheila on seven'],
+    identifiers: ['SheilaOn7FullAlbum07Des', 'SheilaOn7FullAlbumMenentukanArah'],
+  },
+  {
+    keywords: ['anji', 'jaz', 'virgoun', 'armada', 'payung teduh', 'rizky febian'],
+    identifiers: ['LaguPopIndonesiaPopuler'],
+  },
+  {
+    keywords: ['lyodra'],
+    identifiers: ['lyodra-pesan-terakhir-official-music-video-128k'],
+  },
+  {
+    keywords: ['bernadya'],
+    identifiers: [
+      'bernadya-full-album-terbaru-2024-viral-tiktok-lirik-playlist-lagu-bernadya-pilihan-terbaik-2024',
+    ],
+  },
+];
+
+const ARCHIVE_STOPWORDS = new Set([
+  'with',
+  'the',
+  'of',
+  'in',
+  'on',
+  'to',
+  'for',
+  'and',
+  'feat',
+  'ft',
+  'from',
+]);
+
 export function getTrackCacheKey(title: string, artist: string): string {
-  return `${title.trim().toLowerCase()}|${artist.split(',')[0].trim().toLowerCase()}`;
+  return normalizeTrackCacheKey(title, artist);
 }
 
 export function getCachedFullLengthUrl(title: string, artist: string): string | undefined {
@@ -59,10 +123,35 @@ export function getCachedFullLengthUrl(title: string, artist: string): string | 
 function normalizeWords(text: string): string[] {
   return text
     .toLowerCase()
+    .replace(/&quot;|&#34;/gi, ' ')
     .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((w) => w.length >= 2);
+}
+
+function isUnwantedVariant(candidateText: string, requestedTitle: string): boolean {
+  const lowerCandidate = candidateText.toLowerCase();
+  const lowerRequested = requestedTitle.toLowerCase();
+  const unwantedTokens = [
+    'karaoke',
+    'instrumental',
+    'originally performed',
+    'originally perfomed',
+    'tribute',
+    'ringtone',
+    '8d audio',
+    'nightcore',
+    'midi',
+    'breakbeat',
+    'jedag jedug',
+  ];
+  for (const token of unwantedTokens) {
+    if (lowerCandidate.includes(token) && !lowerRequested.includes(token)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function extractBestSaavnDownloadUrl(downloadUrl?: SaavnDownloadUrl[] | string): string | null {
@@ -109,15 +198,15 @@ export async function searchJioSaavnFullTrack(
   artist: string
 ): Promise<{ url: string; duration?: number } | null> {
   const cleanTitle = title.replace(/\([^)]*\)/g, '').trim();
-  const cleanArtist = artist.split(',')[0].split('&')[0].trim();
+  const cleanArtist = artist.split(/,|&|\bfeat\b|\bft\b/i)[0].trim();
   const query = `${cleanTitle} ${cleanArtist}`.trim();
-  const titleWords = normalizeWords(cleanTitle);
-  const artistWords = normalizeWords(cleanArtist);
+  const titleWords = normalizeWords(cleanTitle).filter((w) => !ARCHIVE_STOPWORDS.has(w));
+  const artistWords = normalizeWords(cleanArtist).filter((w) => !ARCHIVE_STOPWORDS.has(w));
 
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1800);
-    const res = await fetch(`${JIOSAAVN_API_URL}?query=${encodeURIComponent(query)}&limit=6`, {
+    const res = await fetch(`${JIOSAAVN_API_URL}?query=${encodeURIComponent(query)}&limit=8`, {
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -128,11 +217,21 @@ export async function searchJioSaavnFullTrack(
     if (!Array.isArray(results) || results.length === 0) return null;
 
     const best = results.find((item) => {
-      const itemTitle = (item.name || item.title || '').toLowerCase();
+      const rawItemTitle = (item.name || item.title || '').replace(/&quot;/gi, '"');
+      const itemTitle = rawItemTitle.toLowerCase();
       const itemArtist = extractSaavnArtist(item).toLowerCase();
       const dur = Number(item.duration || 0);
-      if (dur > 0 && dur < 75) return false;
-      if (itemTitle.includes('karaoke') || itemArtist.includes('karaoke')) return false;
+      if (dur > 0 && (dur < 75 || dur > 600)) return false;
+      if (isUnwantedVariant(`${rawItemTitle} ${itemArtist}`, title)) return false;
+
+      // Avoid sped up / slowed remixes unless requested
+      if (
+        (itemTitle.includes('sped up') || itemTitle.includes('slowed')) &&
+        !title.toLowerCase().includes('sped up') &&
+        !title.toLowerCase().includes('slowed')
+      ) {
+        return false;
+      }
 
       const titleMatches =
         titleWords.length > 0 && titleWords.every((w) => itemTitle.includes(w));
@@ -156,8 +255,31 @@ export async function searchJioSaavnFullTrack(
   return null;
 }
 
+async function fetchArchiveIdentifierFiles(
+  identifier: string
+): Promise<Array<{ name?: string; length?: string; size?: string }>> {
+  const cached = archiveMetadataFilesCache.get(identifier);
+  if (cached) return cached;
+
+  try {
+    const metaCtrl = new AbortController();
+    const metaTimeout = setTimeout(() => metaCtrl.abort(), 1900);
+    const metaRes = await fetch(`https://archive.org/metadata/${identifier}`, {
+      signal: metaCtrl.signal,
+    });
+    clearTimeout(metaTimeout);
+    if (!metaRes.ok) return [];
+    const meta = await metaRes.json();
+    const files = Array.isArray(meta.files) ? meta.files : [];
+    archiveMetadataFilesCache.set(identifier, files);
+    return files;
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Engine 2: Internet Archive Full-Track MP3 Resolver (fast parallel metadata check)
+ * Engine 2: Internet Archive Full-Track MP3 Resolver (targeted Lucene title/creator MP3 search + Indonesian album collections)
  */
 export async function searchInternetArchiveFullMp3(
   title: string,
@@ -165,54 +287,90 @@ export async function searchInternetArchiveFullMp3(
 ): Promise<{ url: string; duration?: number } | null> {
   try {
     const cleanTitle = title.replace(/\([^)]*\)/g, '').trim();
-    const cleanArtist = artist.split(',')[0].split('&')[0].trim();
-    const titleWords = normalizeWords(cleanTitle);
+    const cleanArtist = artist.split(/,|&|\bfeat\b|\bft\b/i)[0].trim();
+    const titleWords = normalizeWords(cleanTitle).filter((w) => !ARCHIVE_STOPWORDS.has(w));
+    const artistWords = normalizeWords(cleanArtist).filter((w) => !ARCHIVE_STOPWORDS.has(w));
     if (titleWords.length === 0) return null;
 
-    const q = `(${cleanTitle}) AND (${cleanArtist}) AND mediatype:audio`;
+    const lowerArtist = cleanArtist.toLowerCase();
+    const knownAlbumIds: string[] = [];
+    for (const entry of KNOWN_ARCHIVE_ALBUM_SOURCES) {
+      if (entry.keywords.some((kw) => lowerArtist.includes(kw))) {
+        knownAlbumIds.push(...entry.identifiers);
+      }
+    }
+
+    const titleClause = titleWords.map((w) => `title:(${w})`).join(' AND ');
+    const artistClause =
+      artistWords.length > 0
+        ? artistWords.map((w) => `(title:(${w}) OR creator:(${w}))`).join(' AND ')
+        : '';
+    const q = `${titleClause}${
+      artistClause ? ` AND ${artistClause}` : ''
+    } AND mediatype:audio AND format:("VBR MP3" OR "MP3")`;
     const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(
       q
-    )}&fl[]=identifier,title&rows=3&output=json`;
+    )}&fl[]=identifier,title&rows=5&output=json`;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
+    let searchDocs: Array<{ identifier: string; title?: string }> = [];
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok) {
+        const data = await res.json();
+        searchDocs = data.response?.docs || [];
+      }
+    } catch {
+      // Fallback to knownAlbumIds if search times out
+    }
 
-    const data = await res.json();
-    const docs: Array<{ identifier: string; title?: string }> = data.response?.docs || [];
-    if (docs.length === 0) return null;
+    // Prioritize official/clean uploads over DJ remixes or covers
+    const wantsRemixOrCover = /dj|remix|cover|koplo/i.test(title);
+    const sortedSearchDocs = [...searchDocs].sort((a, b) => {
+      const aText = `${a.identifier} ${a.title || ''}`.toLowerCase();
+      const bText = `${b.identifier} ${b.title || ''}`.toLowerCase();
+      const aIsRemix = /dj[-_\s]|remix|breakbeat|koplo|cover|karaoke|midi/i.test(aText);
+      const bIsRemix = /dj[-_\s]|remix|breakbeat|koplo|cover|karaoke|midi/i.test(bText);
+      if (!wantsRemixOrCover && aIsRemix !== bIsRemix) {
+        return aIsRemix ? 1 : -1;
+      }
+      return 0;
+    });
+
+    const candidateDocs: Array<{ identifier: string; title?: string }> = [...sortedSearchDocs];
+    for (const albumId of knownAlbumIds) {
+      if (!candidateDocs.some((d) => d.identifier === albumId)) {
+        candidateDocs.push({ identifier: albumId, title: cleanArtist });
+      }
+    }
+
+    if (candidateDocs.length === 0) return null;
 
     const metaResults = await Promise.all(
-      docs.map(async (doc) => {
-        try {
-          const metaCtrl = new AbortController();
-          const metaTimeout = setTimeout(() => metaCtrl.abort(), 1800);
-          const metaRes = await fetch(`https://archive.org/metadata/${doc.identifier}`, {
-            signal: metaCtrl.signal,
-          });
-          clearTimeout(metaTimeout);
-          if (!metaRes.ok) return null;
-          const meta = await metaRes.json();
-          return { doc, files: meta.files || [] };
-        } catch {
-          return null;
-        }
+      candidateDocs.slice(0, 6).map(async (doc) => {
+        const files = await fetchArchiveIdentifierFiles(doc.identifier);
+        return files.length > 0 ? { doc, files } : null;
       })
     );
 
     for (const item of metaResults) {
       if (!item) continue;
-      const mp3Files: Array<{ name?: string; length?: string; size?: string }> = item.files.filter(
-        (f: { name?: string }) => f.name && f.name.toLowerCase().endsWith('.mp3')
+      const mp3Files = item.files.filter(
+        (f) =>
+          f.name &&
+          f.name.toLowerCase().endsWith('.mp3') &&
+          !f.name.toLowerCase().endsWith('.crdownload')
       );
 
       const match = mp3Files.find((f) => {
         const len = parseFloat(f.length || '0');
         const size = parseInt(f.size || '0', 10);
         if (len > 0 && (len < 75 || len > 650)) return false;
-        if (size > 0 && size < 500000) return false;
+        if (size > 0 && size < 450000) return false;
+        if (isUnwantedVariant(f.name || '', title)) return false;
+
         const targetText =
           mp3Files.length === 1
             ? `${item.doc.title || ''} ${f.name || ''}`.toLowerCase()
@@ -221,10 +379,12 @@ export async function searchInternetArchiveFullMp3(
       });
 
       if (match?.name) {
+        const encodedFilePath = match.name
+          .split('/')
+          .map((seg) => encodeURIComponent(seg))
+          .join('/');
         return {
-          url: `https://archive.org/download/${item.doc.identifier}/${encodeURIComponent(
-            match.name
-          )}`,
+          url: `https://archive.org/download/${item.doc.identifier}/${encodedFilePath}`,
           duration: Math.round(parseFloat(match.length || '0')) || undefined,
         };
       }
@@ -377,11 +537,11 @@ function mapDeezerItemsToMetadataTracks(results: DeezerResult[]): Track[] {
 function mapSaavnItemsToTracks(results: SaavnSongResult[]): Track[] {
   return results
     .filter((item) => {
-      const title = (item.name || item.title || '').toLowerCase();
-      const artist = extractSaavnArtist(item).toLowerCase();
+      const title = (item.name || item.title || '').replace(/&quot;/gi, '"');
+      const artist = extractSaavnArtist(item);
       const dur = Number(item.duration || 0);
-      if (dur > 0 && dur < 75) return false;
-      if (title.includes('karaoke') || artist.includes('karaoke')) return false;
+      if (dur > 0 && (dur < 75 || dur > 600)) return false;
+      if (isUnwantedVariant(`${title} ${artist}`, '')) return false;
       return Boolean((item.name || item.title) && extractBestSaavnDownloadUrl(item.downloadUrl));
     })
     .map((item, idx) => {
@@ -476,12 +636,31 @@ export async function searchOnlineTracks(query: string, limit = 15): Promise<Tra
   if (catalogTracks.length > 0 && saavnTracks.length > 0) {
     finalTracks = catalogTracks.map((t) => {
       const cached = resolvedStreamCache.get(getTrackCacheKey(t.title, t.artist));
-      return cached ? { ...t, audioUrl: cached } : t;
+      if (cached) {
+        return { ...t, audioUrl: cached };
+      }
+      const tWords = normalizeWords(t.title).filter((w) => !ARCHIVE_STOPWORDS.has(w));
+      const aWords = normalizeWords(t.artist).filter((w) => !ARCHIVE_STOPWORDS.has(w));
+      const fuzzySaavn = saavnTracks.find((s) => {
+        if (!s.audioUrl) return false;
+        const sTitle = s.title.toLowerCase();
+        const sArtist = s.artist.toLowerCase();
+        return (
+          tWords.length > 0 &&
+          tWords.every((w) => sTitle.includes(w)) &&
+          (aWords.length === 0 || aWords.some((w) => sArtist.includes(w)))
+        );
+      });
+      if (fuzzySaavn?.audioUrl) {
+        resolvedStreamCache.set(getTrackCacheKey(t.title, t.artist), fuzzySaavn.audioUrl);
+        return { ...t, audioUrl: fuzzySaavn.audioUrl };
+      }
+      return t;
     });
   }
 
-  // Pre-warm full-length stream resolution for top 2 results in background
-  finalTracks.slice(0, 2).forEach((t) => {
+  // Pre-warm full-length stream resolution for top 4 results in background
+  finalTracks.slice(0, 4).forEach((t) => {
     resolveFullLengthAudioUrl(t.title, t.artist).catch(() => {});
   });
 
@@ -505,27 +684,47 @@ export function isShortPreviewUrl(url?: string): boolean {
 }
 
 /**
- * Pre-loads and attaches working full-length audio streams on startup for all default tracks
+ * Pre-loads and attaches working full-length audio streams and fallback CDN streams on startup
  */
 export async function hydrateDefaultTracksAudio(tracks: Track[]): Promise<Track[]> {
   const updated = await Promise.all(
     tracks.map(async (track) => {
-      if (track.audioUrl && !isShortPreviewUrl(track.audioUrl)) {
-        resolvedStreamCache.set(getTrackCacheKey(track.title, track.artist), track.audioUrl);
-        return track;
+      let nextTrack = { ...track };
+      if (nextTrack.audioUrl && !isShortPreviewUrl(nextTrack.audioUrl)) {
+        resolvedStreamCache.set(getTrackCacheKey(nextTrack.title, nextTrack.artist), nextTrack.audioUrl);
       }
-      try {
-        const fullUrl = await resolveFullLengthAudioUrl(track.title, track.artist);
-        if (fullUrl) {
-          return {
-            ...track,
-            audioUrl: fullUrl,
-          };
+
+      // Ensure every default track also has an unblocked Apple/Deezer CDN fallbackPreviewUrl
+      // in case archive.org is blocked by the user's mobile carrier ISP
+      if (!nextTrack.fallbackPreviewUrl) {
+        try {
+          const q = encodeURIComponent(`${nextTrack.title} ${nextTrack.artist.split(',')[0]}`);
+          const res = await fetch(
+            `https://itunes.apple.com/search?term=${q}&country=ID&media=music&entity=song&limit=1`
+          );
+          if (res.ok) {
+            const data = await res.json();
+            const preview = data?.results?.[0]?.previewUrl;
+            if (preview) {
+              nextTrack = { ...nextTrack, fallbackPreviewUrl: preview };
+            }
+          }
+        } catch {
+          // Ignore if offline
         }
-      } catch {
-        // Keep existing audioUrl or procedural fallback
       }
-      return track;
+
+      if (!nextTrack.audioUrl || isShortPreviewUrl(nextTrack.audioUrl)) {
+        try {
+          const fullUrl = await resolveFullLengthAudioUrl(nextTrack.title, nextTrack.artist);
+          if (fullUrl) {
+            nextTrack = { ...nextTrack, audioUrl: fullUrl };
+          }
+        } catch {
+          // Keep existing audioUrl or fallbackPreviewUrl
+        }
+      }
+      return nextTrack;
     })
   );
   return updated;
@@ -556,3 +755,66 @@ export async function fetchLyricsFromLrclib(
     return null;
   }
 }
+
+/**
+ * Generates a dynamic trending radio queue when a user plays a song from Search.
+ * Keeps the exact same language ('id' | 'ko' | 'ja' | 'en') and genre, while picking
+ * varied currently trending artists so the next songs are fresh, relevant, and trending.
+ */
+export async function fetchTrendingRadioQueue(
+  seedTrack: Track,
+  existingTracks: Track[] = []
+): Promise<Track[]> {
+  const targetLang = detectTrackLanguage(seedTrack);
+  const seedArtists = getTrendingSeedArtistsForTrack(seedTrack);
+
+  // Shuffle trending seed artists so the queue feels free/varied ("bebas tapi genre & bahasa sama & tren")
+  const shuffledArtists = [...seedArtists].sort(() => Math.random() - 0.5).slice(0, 3);
+
+  try {
+    const artistBuckets = await Promise.all(
+      shuffledArtists.map(async (artistName) => {
+        try {
+          const results = await searchOnlineTracks(artistName, 5);
+          return results
+            .filter(
+              (r) =>
+                r.id !== seedTrack.id &&
+                r.title.toLowerCase() !== seedTrack.title.toLowerCase() &&
+                detectTrackLanguage(r) === targetLang
+            )
+            .map((r) => ({
+              ...r,
+              // Align genre tag with the seed track's genre cohort so Tier 1 matching prioritizes it
+              genre: seedTrack.genre,
+            }));
+        } catch {
+          return [];
+        }
+      })
+    );
+
+    // Interleave tracks round-robin across the trending artists for maximum variety
+    const interleaved: Track[] = [];
+    const maxLen = Math.max(0, ...artistBuckets.map((b) => b.length));
+    for (let i = 0; i < maxLen; i++) {
+      for (const bucket of artistBuckets) {
+        if (bucket[i]) {
+          interleaved.push(bucket[i]);
+        }
+      }
+    }
+
+    const finalQueue = buildImmediateSimilarQueue(seedTrack, [...interleaved, ...existingTracks]);
+
+    // Pre-warm full-length audio streams for the upcoming tracks in the radio queue
+    finalQueue.slice(1, 5).forEach((t) => {
+      resolveFullLengthAudioUrl(t.title, t.artist).catch(() => {});
+    });
+
+    return finalQueue;
+  } catch {
+    return buildImmediateSimilarQueue(seedTrack, existingTracks);
+  }
+}
+

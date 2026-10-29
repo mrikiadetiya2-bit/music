@@ -190,22 +190,39 @@ export function generateProceduralWavBlob(baseFreq = 261.63, durationSeconds = 1
 }
 
 /**
- * Safely maps a desired track seek time (e.g. 120s on a 261s song) to a valid position
- * within the underlying HTMLAudioElement buffer (e.g. 29.7s iTunes preview or 24s WAV),
- * preventing premature 'ended' events when seeking past the preview length.
+ * Safely maps a desired track seek time to a valid position within the underlying
+ * HTMLAudioElement buffer without wrapping/looping back to the start.
  */
 export function computeAudioSeekTime(targetTrackTime: number, audioBufferDuration: number): number {
   if (!Number.isFinite(targetTrackTime) || targetTrackTime < 0) return 0;
-  if (!Number.isFinite(audioBufferDuration) || audioBufferDuration <= 1) return 0;
+  if (!Number.isFinite(audioBufferDuration) || audioBufferDuration <= 1) return targetTrackTime;
 
-  // If the target time fits well inside the actual audio buffer, seek 1:1
-  if (targetTrackTime < audioBufferDuration - 1) {
-    return targetTrackTime;
-  }
+  return Math.min(targetTrackTime, Math.max(0, audioBufferDuration - 0.5));
+}
 
-  // Otherwise wrap cleanly within the safe middle of the audio buffer so it never hits the end immediately
-  const safeWindow = Math.max(1, audioBufferDuration - 2);
-  return targetTrackTime % safeWindow;
+/**
+ * Normalizes track title and primary artist into a canonical cache key so metadata from
+ * iTunes/Deezer matches full-length streams from JioSaavn and Archive.org reliably.
+ */
+export function normalizeTrackCacheKey(title: string, artist: string): string {
+  const cleanTitle = title
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&amp;/gi, '&')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .replace(/\b(feat|ft|with)\b.*$/i, ' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const primaryArtist = artist
+    .split(/,|&|\bfeat\b|\bft\b|\bwith\b|\bx\b/i)[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return `${cleanTitle}|${primaryArtist}`;
 }
 
 /**
@@ -218,3 +235,433 @@ export function getNextTrackIndex(queue: Track[], currentTrackId: string): numbe
   return (idx + 1) % queue.length;
 }
 
+const INDONESIAN_ARTIST_KEYWORDS = [
+  'bernadya',
+  'tulus',
+  'mahalini',
+  'hindia',
+  'fiersa',
+  'juicy luicy',
+  'tiara andini',
+  'lyodra',
+  'ziva',
+  'rizky febian',
+  'sal priadi',
+  'nadin amizah',
+  'pamungkas',
+  'sheila on 7',
+  'dewa 19',
+  'noah',
+  'peterpan',
+  'raisa',
+  'isyana',
+  'yura yunita',
+  'kaleb j',
+  'raim laode',
+  'for revenge',
+  'last child',
+  '.feast',
+  'reality club',
+  'payung teduh',
+  'fourtwnty',
+  'virgoun',
+  'budi doremi',
+  'andmesh',
+  'rossa',
+  'afgan',
+  'glenn fredly',
+  'yovie',
+  'maliq',
+  'hivi',
+  'vierratale',
+  'nidji',
+  'ungu',
+  'slank',
+  'kotak',
+  'armada',
+  'wali',
+  'judika',
+  'denny caknan',
+  'ndx',
+  'gildcoustic',
+  'guyon waton',
+  'nyoman paul',
+  'rony parulian',
+  'adrian khalif',
+  'bilal indrajaya',
+  'danilla',
+  'ardhito',
+  'kunto aji',
+  'kahitna',
+  'kerispatih',
+  'samsons',
+  'ada band',
+  'dmasiv',
+  "d'masiv",
+  'geisha',
+  'letto',
+  'vierra',
+];
+
+const INDONESIAN_WORD_SET = new Set([
+  'yang',
+  'dan',
+  'di',
+  'ku',
+  'mu',
+  'aku',
+  'kau',
+  'kamu',
+  'hati',
+  'cinta',
+  'jalan',
+  'bulan',
+  'waktu',
+  'salah',
+  'indah',
+  'sedih',
+  'kita',
+  'rasa',
+  'diri',
+  'pulang',
+  'malam',
+  'pagi',
+  'hujan',
+  'pisah',
+  'bersama',
+  'tak',
+  'bisa',
+  'untuk',
+  'dengan',
+  'jangan',
+  'kembali',
+  'kenangan',
+  'sendiri',
+  'jatuh',
+  'suka',
+  'pamit',
+  'sepatu',
+  'sewindu',
+  'monokrom',
+  'interaksi',
+  'sial',
+  'evaluasi',
+  'rumah',
+  'cincin',
+  'komang',
+  'nanti',
+  'bunga',
+  'abadi',
+  'penjaga',
+  'satu',
+  'dua',
+  'tiga',
+  'bukan',
+  'masih',
+  'sampai',
+  'karena',
+  'bila',
+  'jika',
+  'tanpa',
+  'tentang',
+  'usai',
+  'luka',
+  'bahagia',
+  'jiwa',
+  'raga',
+  'langit',
+  'abu',
+  'teman',
+  'hidup',
+  'ruang',
+  'cukup',
+  'terlalu',
+  'pergi',
+  'hilang',
+  'tunggu',
+  'ingin',
+  'mengapa',
+  'kenapa',
+  'semua',
+  'dunia',
+  'mimpi',
+]);
+
+const KPOP_ARTIST_KEYWORDS = [
+  'illit',
+  'newjeans',
+  'jungkook',
+  'bts',
+  'blackpink',
+  'aespa',
+  'ive',
+  'le sserafim',
+  'twice',
+  'seventeen',
+  'stray kids',
+  'exo',
+  'nct',
+  'enhypen',
+  'txt',
+  'babymonster',
+  'kiss of life',
+  'day6',
+  'iu',
+  'rosé',
+  'jennie',
+  'lisa',
+  'jisoo',
+  'zico',
+  'bigbang',
+  'red velvet',
+  'itzy',
+  'treasure',
+  'riize',
+  'boynextdoor',
+  'stayc',
+  'g-idle',
+  '(g)i-dle',
+];
+
+const JPOP_ARTIST_KEYWORDS = [
+  'yoasobi',
+  'fujii kaze',
+  'kenshi yonezu',
+  'ado',
+  'radwimps',
+  'creepy nuts',
+  'imase',
+  'vaundy',
+  'official hige dandism',
+  'king gnu',
+  'mrs. green apple',
+];
+
+/**
+ * Detects the language/region of a track ('id' | 'ko' | 'ja' | 'en')
+ * from its title, artist, album, and genre.
+ */
+export function detectTrackLanguage(
+  track: Pick<Track, 'title' | 'artist' | 'album' | 'genre'>
+): 'id' | 'ko' | 'ja' | 'en' {
+  const combined = `${track.title} ${track.artist} ${track.album}`.toLowerCase();
+
+  // Check Korean (Hangul characters, K-Pop genre, or K-Pop artists)
+  if (
+    track.genre === 'K-Pop' ||
+    /[\uAC00-\uD7AF]/.test(combined) ||
+    KPOP_ARTIST_KEYWORDS.some((k) => combined.includes(k))
+  ) {
+    return 'ko';
+  }
+
+  // Check Japanese (Hiragana/Katakana or J-Pop artists)
+  if (/[\u3040-\u30FF]/.test(combined) || JPOP_ARTIST_KEYWORDS.some((k) => combined.includes(k))) {
+    return 'ja';
+  }
+
+  // Check Indonesian (known Indonesian artists or Indonesian words in title/album)
+  if (INDONESIAN_ARTIST_KEYWORDS.some((k) => combined.includes(k))) {
+    return 'id';
+  }
+
+  const tokens = combined.replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const indoMatches = tokens.filter((w) => INDONESIAN_WORD_SET.has(w));
+  if (indoMatches.length >= 1) {
+    return 'id';
+  }
+
+  return 'en';
+}
+
+/**
+ * Returns currently trending artist seeds matching the exact language AND genre of a track,
+ * excluding the current track's primary artist so the auto-queue plays varied trending hits
+ * in the same genre and language.
+ */
+export function getTrendingSeedArtistsForTrack(
+  track: Pick<Track, 'title' | 'artist' | 'album' | 'genre'>
+): string[] {
+  const lang = detectTrackLanguage(track);
+  const primaryArtist = track.artist.split(',')[0].split('&')[0].trim().toLowerCase();
+
+  let pool: string[];
+
+  if (lang === 'id') {
+    switch (track.genre) {
+      case 'Indie':
+        pool = [
+          'Bernadya',
+          'Sal Priadi',
+          'Hindia',
+          'Nadin Amizah',
+          'Juicy Luicy',
+          'Fiersa Besari',
+          'Fourtwnty',
+          'Payung Teduh',
+        ];
+        break;
+      case 'Chill':
+        pool = [
+          'Tulus',
+          'Nadin Amizah',
+          'Sal Priadi',
+          'Kunto Aji',
+          'Pamungkas',
+          'Bernadya',
+          'Ardhito Pramono',
+        ];
+        break;
+      case 'Rock':
+        pool = [
+          'Sheila On 7',
+          'For Revenge',
+          'Dewa 19',
+          'Noah',
+          'Last Child',
+          '.Feast',
+          'Kotak',
+        ];
+        break;
+      default:
+        // Indonesian Pop Trending
+        pool = [
+          'Mahalini',
+          'Tulus',
+          'Juicy Luicy',
+          'Lyodra',
+          'Tiara Andini',
+          'Rizky Febian',
+          'Bernadya',
+          'Yura Yunita',
+          'Sal Priadi',
+        ];
+        break;
+    }
+  } else if (lang === 'ko') {
+    pool = [
+      'ILLIT',
+      'NewJeans',
+      'aespa',
+      'BABYMONSTER',
+      'JENNIE',
+      'ROSÉ',
+      'Jungkook',
+      'LE SSERAFIM',
+    ];
+  } else if (lang === 'ja') {
+    pool = ['YOASOBI', 'Fujii Kaze', 'Creepy Nuts', 'imase', 'Mrs. GREEN APPLE', 'Vaundy'];
+  } else {
+    switch (track.genre) {
+      case 'Indie':
+        pool = [
+          'Wave to Earth',
+          'beabadoobee',
+          'Cigarettes After Sex',
+          'Clairo',
+          'd4vd',
+          'Stephen Sanchez',
+        ];
+        break;
+      case 'Chill':
+        pool = [
+          'Laufey',
+          'Daniel Caesar',
+          'keshi',
+          'Joji',
+          'Stephen Sanchez',
+          'Bruno Major',
+          'SZA',
+        ];
+        break;
+      case 'Rock':
+        pool = [
+          'Arctic Monkeys',
+          'Coldplay',
+          'The Neighbourhood',
+          'Tom Odell',
+          'Linkin Park',
+          'OneRepublic',
+        ];
+        break;
+      default:
+        // Global English Pop Trending
+        pool = [
+          'Bruno Mars',
+          'Sabrina Carpenter',
+          'Billie Eilish',
+          'Lady Gaga',
+          'Olivia Rodrigo',
+          'Taylor Swift',
+          'The Weeknd',
+          'Ariana Grande',
+        ];
+        break;
+    }
+  }
+
+  // Filter out the exact same artist first so the next songs are varied trending artists of the same genre/language
+  const otherTrendingArtists = pool.filter((a) => !primaryArtist.includes(a.toLowerCase()));
+  return otherTrendingArtists.length > 0 ? otherTrendingArtists : pool;
+}
+
+/**
+ * Builds an immediate smart radio queue starting with `seedTrack`, followed by tracks
+ * that match the same language and genre (prioritizing varied trending artists).
+ */
+export function buildImmediateSimilarQueue(
+  seedTrack: Track,
+  candidateTracks: Track[]
+): Track[] {
+  const targetLang = detectTrackLanguage(seedTrack);
+  const seedArtist = seedTrack.artist.split(',')[0].trim().toLowerCase();
+
+  const others = candidateTracks.filter(
+    (t) =>
+      t.id !== seedTrack.id &&
+      !(
+        t.title.toLowerCase() === seedTrack.title.toLowerCase() &&
+        t.artist.toLowerCase() === seedTrack.artist.toLowerCase()
+      )
+  );
+
+  // Tier 1: Same language AND same genre, different artist (varied trending)
+  const tier1 = others.filter(
+    (t) =>
+      detectTrackLanguage(t) === targetLang &&
+      t.genre === seedTrack.genre &&
+      !t.artist.toLowerCase().includes(seedArtist)
+  );
+
+  // Tier 2: Same language AND same genre (including same artist)
+  const tier2 = others.filter(
+    (t) =>
+      detectTrackLanguage(t) === targetLang &&
+      t.genre === seedTrack.genre &&
+      t.artist.toLowerCase().includes(seedArtist)
+  );
+
+  // Tier 3: Same language (any similar genre)
+  const tier3 = others.filter(
+    (t) => detectTrackLanguage(t) === targetLang && t.genre !== seedTrack.genre
+  );
+
+  // Tier 4: Same genre (fallback if candidate pool has very few same-language songs)
+  const tier4 = others.filter(
+    (t) => detectTrackLanguage(t) !== targetLang && t.genre === seedTrack.genre
+  );
+
+  const combined = [...tier1, ...tier2, ...tier3, ...tier4];
+  const seen = new Set<string>([`${seedTrack.title.toLowerCase()}__${seedTrack.artist.toLowerCase()}`]);
+  const deduped: Track[] = [seedTrack];
+
+  for (const t of combined) {
+    const key = `${t.title.toLowerCase()}__${t.artist.toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(t);
+    }
+  }
+
+  return deduped;
+}

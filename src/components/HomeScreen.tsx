@@ -23,7 +23,7 @@ interface HomeScreenProps {
   isPlaying: boolean;
   selectedGenre: GenreFilter;
   onSelectGenre: (genre: GenreFilter) => void;
-  onPlayTrack: (track: Track) => void;
+  onPlayTrack: (track: Track, fromSearch?: boolean) => void;
   onOpenFullPlayer: () => void;
   onOpenPlaylist: (playlist: Playlist) => void;
   onOpenSearch: (initialQuery?: string) => void;
@@ -359,7 +359,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               >
                 <div
                   onClick={() => {
-                    onPlayTrack(track);
+                    onPlayTrack(track, Boolean(inlineSearch.trim()));
                     onOpenFullPlayer();
                   }}
                   role="button"
@@ -367,7 +367,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      onPlayTrack(track);
+                      onPlayTrack(track, Boolean(inlineSearch.trim()));
                       onOpenFullPlayer();
                     }
                   }}
@@ -416,7 +416,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => onPlayTrack(track)}
+                    onClick={() => onPlayTrack(track, Boolean(inlineSearch.trim()))}
                     aria-label={isTrackPlaying ? `Pause ${track.title}` : `Play ${track.title}`}
                     className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-[#0F172A] flex items-center justify-center transition-colors cursor-pointer"
                   >
