@@ -13,50 +13,160 @@ interface ITunesResult {
   primaryGenreName?: string;
 }
 
+interface DeezerResult {
+  id: number;
+  title: string;
+  duration?: number;
+  preview?: string;
+  artist?: { name?: string };
+  album?: { title?: string; cover_big?: string; cover_medium?: string };
+}
+
 /**
- * Searches real songs from the iTunes Search API with playable audio streams
+ * Helper to execute JSONP requests in browser environments where CORS may be restricted
+ * by mobile carriers, Safari ITP, or static hosts like Netlify.
+ */
+function fetchJsonp<T>(url: string, callbackParam = 'callback', timeoutMs = 6500): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (typeof document === 'undefined') {
+      reject(new Error('No document available for JSONP'));
+      return;
+    }
+
+    const callbackName = `__musee_jsonp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const script = document.createElement('script');
+    const win = window as unknown as Record<string, unknown>;
+
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      cleanup();
+      reject(new Error('JSONP request timed out'));
+    }, timeoutMs);
+
+    function cleanup() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      delete win[callbackName];
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    }
+
+    win[callbackName] = (data: T) => {
+      cleanup();
+      resolve(data);
+    };
+
+    const separator = url.includes('?') ? '&' : '?';
+    script.src = `${url}${separator}${callbackParam}=${callbackName}`;
+    script.async = true;
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('JSONP script error'));
+    };
+
+    document.head.appendChild(script);
+  });
+}
+
+function mapITunesItemsToTracks(results: ITunesResult[]): Track[] {
+  return results
+    .filter((item) => item.trackName && item.artistName && item.previewUrl)
+    .map((item) => {
+      const highResCover = item.artworkUrl100
+        ? item.artworkUrl100.replace('100x100bb', '600x600bb')
+        : ARTWORK.chillVibesMoon;
+      const durationSec = item.trackTimeMillis
+        ? Math.round(item.trackTimeMillis / 1000)
+        : 210;
+
+      return {
+        id: `itunes-${item.trackId}`,
+        title: item.trackName,
+        artist: item.artistName,
+        album: item.collectionName || 'Single',
+        duration: durationSec,
+        coverUrl: highResCover,
+        audioUrl: item.previewUrl,
+        genre: mapGenre(item.primaryGenreName),
+        lyrics: [
+          { time: 0, text: `${item.trackName} — ${item.artistName}` },
+          { time: 6, text: 'Tap Lyrics to load full synchronized lyrics' },
+          { time: 14, text: 'Available for 1-click Offline Download' },
+          { time: 22, text: 'Music for a brighter day • Musee' },
+        ],
+      };
+    });
+}
+
+function mapDeezerItemsToTracks(results: DeezerResult[]): Track[] {
+  return results
+    .filter((item) => item.title && item.artist?.name && item.preview)
+    .map((item) => ({
+      id: `deezer-${item.id}`,
+      title: item.title,
+      artist: item.artist?.name || 'Unknown Artist',
+      album: item.album?.title || 'Single',
+      duration: item.duration || 210,
+      coverUrl: item.album?.cover_big || item.album?.cover_medium || ARTWORK.chillVibesMoon,
+      audioUrl: item.preview,
+      genre: 'Pop',
+      lyrics: [
+        { time: 0, text: `${item.title} — ${item.artist?.name || ''}` },
+        { time: 6, text: 'Tap Lyrics to load full synchronized lyrics' },
+        { time: 14, text: 'Available for 1-click Offline Download' },
+        { time: 22, text: 'Music for a brighter day • Musee' },
+      ],
+    }));
+}
+
+/**
+ * Searches real songs from multiple online catalogs (iTunes Fetch -> iTunes JSONP -> Deezer JSONP)
+ * so search always works reliably on mobile browsers, Safari, and Netlify deployments.
  */
 export async function searchOnlineTracks(query: string, limit = 15): Promise<Track[]> {
-  if (!query.trim()) return [];
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const encoded = encodeURIComponent(trimmed);
+
+  // 1. Primary: iTunes Search API via standard CORS fetch (prioritizing ID store for Indonesian + global hits)
   try {
-    const encoded = encodeURIComponent(query.trim());
     const response = await fetch(
-      `https://itunes.apple.com/search?term=${encoded}&media=music&entity=song&limit=${limit}`
+      `https://itunes.apple.com/search?term=${encoded}&country=ID&media=music&entity=song&limit=${limit}`
     );
-    if (!response.ok) return [];
-    const data = await response.json();
-    const results: ITunesResult[] = data.results || [];
-
-    return results
-      .filter((item) => item.trackName && item.artistName)
-      .map((item) => {
-        const highResCover = item.artworkUrl100
-          ? item.artworkUrl100.replace('100x100bb', '600x600bb')
-          : ARTWORK.chillVibesMoon;
-        const durationSec = item.trackTimeMillis
-          ? Math.round(item.trackTimeMillis / 1000)
-          : 210;
-
-        return {
-          id: `itunes-${item.trackId}`,
-          title: item.trackName,
-          artist: item.artistName,
-          album: item.collectionName || 'Single',
-          duration: durationSec,
-          coverUrl: highResCover,
-          audioUrl: item.previewUrl,
-          genre: mapGenre(item.primaryGenreName),
-          lyrics: [
-            { time: 0, text: `${item.trackName} — ${item.artistName}` },
-            { time: 6, text: 'Tap Lyrics to load full synchronized lyrics' },
-            { time: 14, text: 'Available for 1-click Offline Download' },
-            { time: 22, text: 'Music for a brighter day • Musee' },
-          ],
-        };
-      });
+    if (response.ok) {
+      const data = await response.json();
+      const tracks = mapITunesItemsToTracks(data.results || []);
+      if (tracks.length > 0) return tracks;
+    }
   } catch {
-    return [];
+    // Proceed to JSONP fallback if fetch is blocked by CORS or mobile network
   }
+
+  // 2. Fallback A: iTunes Search API via JSONP (bypasses CORS blocks on mobile Safari/Chrome & Netlify)
+  try {
+    const data = await fetchJsonp<{ results?: ITunesResult[] }>(
+      `https://itunes.apple.com/search?term=${encoded}&country=ID&media=music&entity=song&limit=${limit}`
+    );
+    const tracks = mapITunesItemsToTracks(data?.results || []);
+    if (tracks.length > 0) return tracks;
+  } catch {
+    // Proceed to Deezer JSONP fallback
+  }
+
+  // 3. Fallback B: Deezer Public Search API via JSONP (millions of Indonesian & global tracks with MP3 previews)
+  try {
+    const deezerData = await fetchJsonp<{ data?: DeezerResult[] }>(
+      `https://api.deezer.com/search?q=${encoded}&limit=${limit}&output=jsonp`
+    );
+    const tracks = mapDeezerItemsToTracks(deezerData?.data || []);
+    if (tracks.length > 0) return tracks;
+  } catch {
+    // Ignore and return empty if completely offline
+  }
+
+  return [];
 }
 
 function mapGenre(raw?: string): Track['genre'] {
@@ -71,67 +181,18 @@ function mapGenre(raw?: string): Track['genre'] {
 }
 
 /**
- * Attempts to resolve a full-length MP3 stream from Internet Archive (0:00 intro to end)
- * for any searched song so it plays from the beginning instead of a 30s chorus snippet.
- */
-export async function resolveFullLengthAudioUrl(
-  title: string,
-  artist: string
-): Promise<string | null> {
-  try {
-    const cleanArtist = artist.split(',')[0].trim();
-    const q = `title:(${title}) AND (${cleanArtist}) AND mediatype:audio`;
-    const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(
-      q
-    )}&fl[]=identifier,title&rows=3&output=json`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const docs = data.response?.docs || [];
-
-    for (const doc of docs) {
-      const metaRes = await fetch(`https://archive.org/metadata/${doc.identifier}`);
-      if (!metaRes.ok) continue;
-      const meta = await metaRes.json();
-      const mp3 = (meta.files || []).find(
-        (f: { name?: string; length?: string }) =>
-          f.name &&
-          f.name.toLowerCase().endsWith('.mp3') &&
-          (!f.length || parseFloat(f.length) < 900)
-      );
-      if (mp3?.name) {
-        return `https://archive.org/download/${doc.identifier}/${encodeURIComponent(mp3.name)}`;
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Resolves real playable audio streams for any tracks that don't already have a full-length audioUrl
+ * Resolves real playable audio streams for any tracks that don't already have an audioUrl
  */
 export async function hydrateDefaultTracksAudio(tracks: Track[]): Promise<Track[]> {
   const updated = await Promise.all(
     tracks.map(async (track) => {
       if (track.audioUrl) return track;
       try {
-        const fullUrl = await resolveFullLengthAudioUrl(track.title, track.artist);
-        if (fullUrl) {
-          return { ...track, audioUrl: fullUrl };
-        }
-        const q = encodeURIComponent(`${track.title} ${track.artist.split(',')[0]}`);
-        const res = await fetch(
-          `https://itunes.apple.com/search?term=${q}&media=music&entity=song&limit=1`
-        );
-        if (!res.ok) return track;
-        const data = await res.json();
-        const match: ITunesResult | undefined = data.results?.[0];
-        if (match?.previewUrl) {
+        const results = await searchOnlineTracks(`${track.title} ${track.artist.split(',')[0]}`, 1);
+        if (results[0]?.audioUrl) {
           return {
             ...track,
-            audioUrl: match.previewUrl,
+            audioUrl: results[0].audioUrl,
           };
         }
       } catch {

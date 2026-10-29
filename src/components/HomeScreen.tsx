@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Bell,
   Search,
@@ -8,10 +8,12 @@ import {
   CheckCircle2,
   Download,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { GenreFilter, Playlist, Track, UserProfile } from '../types/music';
 import { ARTWORK } from '../data/catalog';
 import { filterTracksByGenreAndQuery } from '../utils/musicLogic';
+import { searchOnlineTracks } from '../services/onlineApi';
 
 interface HomeScreenProps {
   userProfile: UserProfile;
@@ -51,9 +53,52 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   downloadingTrackIds,
 }) => {
   const [inlineSearch, setInlineSearch] = useState('');
+  const [onlineSearchResults, setOnlineSearchResults] = useState<Track[]>([]);
+  const [isSearchingOnline, setIsSearchingOnline] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
 
-  const filteredTracks = filterTracksByGenreAndQuery(tracks, selectedGenre, inlineSearch);
+  // Automatically search online tracks when user types in the Home screen search bar
+  useEffect(() => {
+    const trimmed = inlineSearch.trim();
+    if (!trimmed) {
+      setOnlineSearchResults([]);
+      setIsSearchingOnline(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearchingOnline(true);
+
+    const timer = setTimeout(async () => {
+      const results = await searchOnlineTracks(trimmed, 15);
+      if (!cancelled) {
+        setOnlineSearchResults(results);
+        setIsSearchingOnline(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [inlineSearch]);
+
+  const localMatchingTracks = filterTracksByGenreAndQuery(tracks, selectedGenre, inlineSearch);
+
+  const displayedTracks = inlineSearch.trim()
+    ? [
+        ...localMatchingTracks,
+        ...onlineSearchResults.filter(
+          (online) =>
+            !localMatchingTracks.some(
+              (local) =>
+                local.title.toLowerCase() === online.title.toLowerCase() &&
+                local.artist.toLowerCase() === online.artist.toLowerCase()
+            )
+        ),
+      ]
+    : localMatchingTracks;
+
   const madeForYouPlaylists = playlists.slice(0, 3);
 
   return (
@@ -119,7 +164,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </div>
       </header>
 
-      {/* Search Trigger Bar */}
+      {/* Search Trigger Bar (now searches both local & online songs in real time!) */}
       <div className="relative mb-3">
         <Search className="w-4 h-4 text-[#94A3B8] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
         <input
@@ -133,16 +178,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           }}
           placeholder="Search songs, artists, or playlists..."
           aria-label="Search songs, artists, or playlists"
-          className="w-full h-10 pl-10 pr-16 rounded-full bg-white/80 backdrop-blur-xl border border-white/90 text-xs font-medium text-[#0F172A] placeholder:text-[#94A3B8] shadow-[0_4px_14px_rgba(148,163,184,0.08)] focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="w-full h-10 pl-10 pr-20 rounded-full bg-white/80 backdrop-blur-xl border border-white/90 text-xs font-medium text-[#0F172A] placeholder:text-[#94A3B8] shadow-[0_4px_14px_rgba(148,163,184,0.08)] focus:outline-none focus:ring-2 focus:ring-blue-400"
         />
         {inlineSearch ? (
-          <button
-            type="button"
-            onClick={() => onOpenSearch(inlineSearch)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-full bg-[#0F172A] text-white text-[10px] font-semibold cursor-pointer"
-          >
-            Online
-          </button>
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setInlineSearch('')}
+              aria-label="Clear search"
+              className="w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenSearch(inlineSearch)}
+              className="px-2.5 py-1 rounded-full bg-[#0F172A] text-white text-[10px] font-semibold cursor-pointer"
+            >
+              Full
+            </button>
+          </div>
         ) : (
           <button
             type="button"
@@ -154,129 +209,146 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         )}
       </div>
 
-      {/* Hero Banner Card: "Music for a Brighter Day" */}
-      <div className="relative overflow-hidden rounded-[22px] bg-gradient-to-r from-[#DBEAFE] via-[#E0E7FF] to-[#F3E8FF] border border-white/90 shadow-[0_10px_24px_rgba(147,197,253,0.25)] mb-3.5 h-[134px] flex items-center">
-        <img
-          src={ARTWORK.heroGirl}
-          alt="Music for a Brighter Day"
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        <div className="relative z-10 pl-4 pr-36 py-3 flex flex-col justify-between h-full">
-          <div>
-            <h2 className="text-[17px] font-extrabold text-[#0F172A] leading-tight">
-              Music for
-              <br />a Brighter Day
-            </h2>
-            <p className="mt-0.5 text-[10px] font-medium text-[#475569]">
-              Feel the good vibes, anytime, anywhere.
-            </p>
+      {/* Hide Hero & Made For You when typing an active search query on Home screen so results are immediately visible */}
+      {!inlineSearch.trim() && (
+        <>
+          {/* Hero Banner Card: "Music for a Brighter Day" */}
+          <div className="relative overflow-hidden rounded-[22px] bg-gradient-to-r from-[#DBEAFE] via-[#E0E7FF] to-[#F3E8FF] border border-white/90 shadow-[0_10px_24px_rgba(147,197,253,0.25)] mb-3.5 h-[134px] flex items-center">
+            <img
+              src={ARTWORK.heroGirl}
+              alt="Music for a Brighter Day"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            <div className="relative z-10 pl-4 pr-36 py-3 flex flex-col justify-between h-full">
+              <div>
+                <h2 className="text-[17px] font-extrabold text-[#0F172A] leading-tight">
+                  Music for
+                  <br />a Brighter Day
+                </h2>
+                <p className="mt-0.5 text-[10px] font-medium text-[#475569]">
+                  Feel the good vibes, anytime, anywhere.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onPlayTrack(tracks[0]);
+                  onOpenFullPlayer();
+                }}
+                aria-label="Play Featured Track Satu Bulan"
+                className="w-9 h-9 rounded-full bg-[#0F172A] text-white flex items-center justify-center shadow-md hover:bg-slate-800 active:scale-95 transition-transform cursor-pointer"
+              >
+                {isPlaying && currentTrack.id === tracks[0]?.id ? (
+                  <Pause className="w-3.5 h-3.5 fill-white" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-white ml-0.5" />
+                )}
+              </button>
+            </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              onPlayTrack(tracks[0]);
-              onOpenFullPlayer();
-            }}
-            aria-label="Play Featured Track Satu Bulan"
-            className="w-9 h-9 rounded-full bg-[#0F172A] text-white flex items-center justify-center shadow-md hover:bg-slate-800 active:scale-95 transition-transform cursor-pointer"
+          {/* Genre Filter Pills */}
+          <div
+            role="tablist"
+            aria-label="Genre Filter"
+            className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 mb-3.5"
           >
-            {isPlaying && currentTrack.id === tracks[0]?.id ? (
-              <Pause className="w-3.5 h-3.5 fill-white" />
-            ) : (
-              <Play className="w-3.5 h-3.5 fill-white ml-0.5" />
-            )}
-          </button>
-        </div>
-      </div>
+            {GENRE_PILLS.map((genre) => {
+              const active = selectedGenre === genre;
+              return (
+                <button
+                  key={genre}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => onSelectGenre(genre)}
+                  className={`px-3.5 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                    active
+                      ? 'bg-[#0F172A] text-white shadow-xs'
+                      : 'bg-white/75 text-[#64748B] border border-white/90 hover:bg-white hover:text-[#0F172A]'
+                  }`}
+                >
+                  {genre}
+                </button>
+              );
+            })}
+          </div>
 
-      {/* Genre Filter Pills */}
-      <div
-        role="tablist"
-        aria-label="Genre Filter"
-        className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 mb-3.5"
-      >
-        {GENRE_PILLS.map((genre) => {
-          const active = selectedGenre === genre;
-          return (
-            <button
-              key={genre}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => onSelectGenre(genre)}
-              className={`px-3.5 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-                active
-                  ? 'bg-[#0F172A] text-white shadow-xs'
-                  : 'bg-white/75 text-[#64748B] border border-white/90 hover:bg-white hover:text-[#0F172A]'
-              }`}
-            >
-              {genre}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* "Made for You" Section */}
-      <section className="mb-3.5">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-[15px] font-bold text-[#0F172A]">Made for You</h2>
-          <button
-            type="button"
-            onClick={() => onOpenPlaylist(playlists[1])}
-            className="text-[11px] font-semibold text-[#64748B] hover:text-[#0F172A] cursor-pointer"
-          >
-            See All
-          </button>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2.5">
-          {madeForYouPlaylists.map((pl, idx) => {
-            const homeCover = idx === 1 ? ARTWORK.leavesArt : pl.coverUrl;
-            return (
+          {/* "Made for You" Section */}
+          <section className="mb-3.5">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-[15px] font-bold text-[#0F172A]">Made for You</h2>
               <button
-                key={pl.id}
                 type="button"
-                onClick={() => onOpenPlaylist(pl)}
-                className="group text-left rounded-2xl p-1.5 bg-white/75 backdrop-blur-lg border border-white/90 shadow-xs hover:bg-white transition-all cursor-pointer"
+                onClick={() => onOpenPlaylist(playlists[1])}
+                className="text-[11px] font-semibold text-[#64748B] hover:text-[#0F172A] cursor-pointer"
               >
-                <div className="aspect-square w-full rounded-xl overflow-hidden mb-1.5 shadow-xs">
-                  <img
-                    src={homeCover}
-                    alt={pl.title}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                </div>
-                <p className="text-[11px] font-bold text-[#0F172A] truncate px-0.5">
-                  {pl.title}
-                </p>
-                <p className="text-[9.5px] font-medium text-[#64748B] truncate px-0.5">
-                  {pl.subtitle}
-                </p>
+                See All
               </button>
-            );
-          })}
-        </div>
-      </section>
+            </div>
 
-      {/* "Recently Played" Section */}
+            <div className="grid grid-cols-3 gap-2.5">
+              {madeForYouPlaylists.map((pl, idx) => {
+                const homeCover = idx === 1 ? ARTWORK.leavesArt : pl.coverUrl;
+                return (
+                  <button
+                    key={pl.id}
+                    type="button"
+                    onClick={() => onOpenPlaylist(pl)}
+                    className="group text-left rounded-2xl p-1.5 bg-white/75 backdrop-blur-lg border border-white/90 shadow-xs hover:bg-white transition-all cursor-pointer"
+                  >
+                    <div className="aspect-square w-full rounded-xl overflow-hidden mb-1.5 shadow-xs">
+                      <img
+                        src={homeCover}
+                        alt={pl.title}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                    </div>
+                    <p className="text-[11px] font-bold text-[#0F172A] truncate px-0.5">
+                      {pl.title}
+                    </p>
+                    <p className="text-[9.5px] font-medium text-[#64748B] truncate px-0.5">
+                      {pl.subtitle}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      )}
+
+      {/* "Recently Played" or Live Search Results Section */}
       <section>
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-[15px] font-bold text-[#0F172A]">
-            {selectedGenre === 'All' ? 'Recently Played' : `${selectedGenre} Tracks`}
+            {inlineSearch.trim()
+              ? isSearchingOnline
+                ? 'Searching Online Catalog...'
+                : `Search Results (${displayedTracks.length})`
+              : selectedGenre === 'All'
+              ? 'Recently Played'
+              : `${selectedGenre} Tracks`}
           </h2>
           <button
             type="button"
-            onClick={() => onSelectGenre('All')}
+            onClick={() => {
+              if (inlineSearch.trim()) {
+                setInlineSearch('');
+              } else {
+                onSelectGenre('All');
+              }
+            }}
             className="text-[11px] font-semibold text-[#64748B] hover:text-[#0F172A] cursor-pointer"
           >
-            See All
+            {inlineSearch.trim() ? 'Clear' : 'See All'}
           </button>
         </div>
 
         <div className="space-y-2">
-          {filteredTracks.map((track) => {
+          {displayedTracks.map((track) => {
             const isTrackPlaying = currentTrack.id === track.id && isPlaying;
             const isDownloading = !!downloadingTrackIds[track.id];
 

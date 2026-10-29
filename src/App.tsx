@@ -30,7 +30,6 @@ import {
 } from './services/offlineDb';
 import {
   hydrateDefaultTracksAudio,
-  resolveFullLengthAudioUrl,
 } from './services/onlineApi';
 import {
   computeAudioSeekTime,
@@ -222,16 +221,7 @@ export default function App() {
         activeObjectUrlRef.current = blobUrl;
         audio.src = blobUrl;
       } else if (track.audioUrl && navigator.onLine) {
-        // 2. If this is an iTunes 30s chorus preview from Search, try upgrading to full-length 0:00 MP3 first
-        let streamUrl = track.audioUrl;
-        if (streamUrl.includes('apple.com')) {
-          const fullMp3 = await resolveFullLengthAudioUrl(track.title, track.artist);
-          if (requestId !== playRequestIdRef.current) return;
-          if (fullMp3) {
-            streamUrl = fullMp3;
-          }
-        }
-        audio.src = streamUrl;
+        audio.src = track.audioUrl;
       } else {
         // 3. Procedural warm harmonic chord WAV fallback so audio always plays 100% offline
         const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
