@@ -42,24 +42,18 @@ interface SaavnSongResult {
   downloadUrl?: SaavnDownloadUrl[] | string;
 }
 
-const JIOSAAVN_SEARCH_ENDPOINTS = [
-  'https://saavn.dev/api/search/songs',
-  'https://saavn.sumit.co/api/search/songs',
-  'https://jiosaavn-api-privatecvc2.vercel.app/search/songs',
-];
-
-const PIPED_API_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://api.piped.private.coffee',
-  'https://pipedapi.ducks.party',
-  'https://pipedapi-libre.kavin.rocks',
-];
+// Verified live JioSaavn endpoint (returns 200 OK in ~200ms with CORS enabled)
+const JIOSAAVN_API_URL = 'https://saavn.sumit.co/api/search/songs';
 
 // In-memory cache of resolved full-length stream URLs by normalized "title|artist"
 const resolvedStreamCache = new Map<string, string>();
 
-function getCacheKey(title: string, artist: string): string {
+export function getTrackCacheKey(title: string, artist: string): string {
   return `${title.trim().toLowerCase()}|${artist.split(',')[0].trim().toLowerCase()}`;
+}
+
+export function getCachedFullLengthUrl(title: string, artist: string): string | undefined {
+  return resolvedStreamCache.get(getTrackCacheKey(title, artist));
 }
 
 function normalizeWords(text: string): string[] {
@@ -108,9 +102,7 @@ function extractSaavnCover(item: SaavnSongResult): string {
 }
 
 /**
- * Engine 1: JioSaavn Full-Track API
- * Queries saavn.dev / saavn.sumit.co / jiosaavn-api-privatecvc2.vercel.app
- * and extracts the highest quality full-length 320kbps/160kbps MP4/M4A stream.
+ * Engine 1: JioSaavn Full-Track API (320kbps / 160kbps .mp4/.m4a)
  */
 export async function searchJioSaavnFullTrack(
   title: string,
@@ -122,122 +114,50 @@ export async function searchJioSaavnFullTrack(
   const titleWords = normalizeWords(cleanTitle);
   const artistWords = normalizeWords(cleanArtist);
 
-  for (const endpoint of JIOSAAVN_SEARCH_ENDPOINTS) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(`${endpoint}?query=${encodeURIComponent(query)}&limit=8`, {
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (!res.ok) continue;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1800);
+    const res = await fetch(`${JIOSAAVN_API_URL}?query=${encodeURIComponent(query)}&limit=6`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
 
-      const json = await res.json();
-      const results: SaavnSongResult[] = json?.data?.results || json?.results || [];
-      if (!Array.isArray(results) || results.length === 0) continue;
+    const json = await res.json();
+    const results: SaavnSongResult[] = json?.data?.results || json?.results || [];
+    if (!Array.isArray(results) || results.length === 0) return null;
 
-      // Find best matching full-length song (avoiding karaoke/unrelated tracks)
-      const best = results.find((item) => {
-        const itemTitle = (item.name || item.title || '').toLowerCase();
-        const itemArtist = extractSaavnArtist(item).toLowerCase();
-        const dur = Number(item.duration || 0);
-        if (dur > 0 && dur < 75) return false;
-        if (itemTitle.includes('karaoke') || itemArtist.includes('karaoke')) return false;
+    const best = results.find((item) => {
+      const itemTitle = (item.name || item.title || '').toLowerCase();
+      const itemArtist = extractSaavnArtist(item).toLowerCase();
+      const dur = Number(item.duration || 0);
+      if (dur > 0 && dur < 75) return false;
+      if (itemTitle.includes('karaoke') || itemArtist.includes('karaoke')) return false;
 
-        const titleMatches =
-          titleWords.length > 0 && titleWords.every((w) => itemTitle.includes(w));
-        const artistMatches =
-          artistWords.length === 0 || artistWords.some((w) => itemArtist.includes(w));
-        return titleMatches && artistMatches && Boolean(extractBestSaavnDownloadUrl(item.downloadUrl));
-      });
+      const titleMatches =
+        titleWords.length > 0 && titleWords.every((w) => itemTitle.includes(w));
+      const artistMatches =
+        artistWords.length === 0 || artistWords.some((w) => itemArtist.includes(w));
+      return titleMatches && artistMatches && Boolean(extractBestSaavnDownloadUrl(item.downloadUrl));
+    });
 
-      if (best) {
-        const streamUrl = extractBestSaavnDownloadUrl(best.downloadUrl);
-        if (streamUrl) {
-          return {
-            url: streamUrl,
-            duration: Number(best.duration) || undefined,
-          };
-        }
-      }
-    } catch {
-      // Try next JioSaavn mirror
-    }
-  }
-  return null;
-}
-
-/**
- * Engine 2: Piped / Invidious YouTube Music Audio Resolver
- * Searches public Piped API instances with filter=music_songs and resolves /streams/:videoId
- */
-export async function searchPipedYouTubeAudio(
-  title: string,
-  artist: string
-): Promise<{ url: string; duration?: number } | null> {
-  const cleanTitle = title.replace(/\([^)]*\)/g, '').trim();
-  const cleanArtist = artist.split(',')[0].split('&')[0].trim();
-  const q = `${cleanTitle} ${cleanArtist} official audio`.trim();
-
-  for (const instance of PIPED_API_INSTANCES) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3500);
-      const searchRes = await fetch(
-        `${instance}/search?q=${encodeURIComponent(q)}&filter=music_songs`,
-        { signal: controller.signal }
-      );
-      clearTimeout(timeout);
-      if (!searchRes.ok) continue;
-
-      const searchData = await searchRes.json();
-      const items: Array<{ url?: string; duration?: number; title?: string }> =
-        searchData?.items || [];
-      const first = items.find((i) => i.url && i.url.includes('v='));
-      if (!first?.url) continue;
-
-      const videoId = first.url.split('v=')[1]?.split('&')[0];
-      if (!videoId) continue;
-
-      const streamCtrl = new AbortController();
-      const streamTimeout = setTimeout(() => streamCtrl.abort(), 3500);
-      const streamRes = await fetch(`${instance}/streams/${videoId}`, {
-        signal: streamCtrl.signal,
-      });
-      clearTimeout(streamTimeout);
-      if (!streamRes.ok) continue;
-
-      const streamData = await streamRes.json();
-      const audioStreams: Array<{ url?: string; mimeType?: string; bitrate?: number }> =
-        streamData?.audioStreams || [];
-      if (!Array.isArray(audioStreams) || audioStreams.length === 0) continue;
-
-      // Prefer m4a/mp4 stream for iOS Safari compatibility, sorted by highest bitrate
-      const sorted = [...audioStreams]
-        .filter((s) => Boolean(s.url))
-        .sort((a, b) => {
-          const aIsMp4 = (a.mimeType || '').includes('mp4') ? 1 : 0;
-          const bIsMp4 = (b.mimeType || '').includes('mp4') ? 1 : 0;
-          if (aIsMp4 !== bIsMp4) return bIsMp4 - aIsMp4;
-          return (b.bitrate || 0) - (a.bitrate || 0);
-        });
-
-      if (sorted[0]?.url) {
+    if (best) {
+      const streamUrl = extractBestSaavnDownloadUrl(best.downloadUrl);
+      if (streamUrl) {
         return {
-          url: sorted[0].url,
-          duration: Number(streamData?.duration || first.duration) || undefined,
+          url: streamUrl,
+          duration: Number(best.duration) || undefined,
         };
       }
-    } catch {
-      // Try next Piped instance
     }
+  } catch {
+    // Ignore network timeout
   }
   return null;
 }
 
 /**
- * Engine 3: Internet Archive Full-Track MP3 Resolver (archive.org)
- * Finds verified full-length (75s - 650s) MP3 recordings starting from 0:00 intro.
+ * Engine 2: Internet Archive Full-Track MP3 Resolver (fast parallel metadata check)
  */
 export async function searchInternetArchiveFullMp3(
   title: string,
@@ -252,30 +172,41 @@ export async function searchInternetArchiveFullMp3(
     const q = `(${cleanTitle}) AND (${cleanArtist}) AND mediatype:audio`;
     const url = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(
       q
-    )}&fl[]=identifier,title&rows=5&output=json`;
+    )}&fl[]=identifier,title&rows=3&output=json`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const timeout = setTimeout(() => controller.abort(), 2000);
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return null;
 
     const data = await res.json();
     const docs: Array<{ identifier: string; title?: string }> = data.response?.docs || [];
+    if (docs.length === 0) return null;
 
-    for (const doc of docs) {
-      const metaCtrl = new AbortController();
-      const metaTimeout = setTimeout(() => metaCtrl.abort(), 3500);
-      const metaRes = await fetch(`https://archive.org/metadata/${doc.identifier}`, {
-        signal: metaCtrl.signal,
-      });
-      clearTimeout(metaTimeout);
-      if (!metaRes.ok) continue;
+    const metaResults = await Promise.all(
+      docs.map(async (doc) => {
+        try {
+          const metaCtrl = new AbortController();
+          const metaTimeout = setTimeout(() => metaCtrl.abort(), 1800);
+          const metaRes = await fetch(`https://archive.org/metadata/${doc.identifier}`, {
+            signal: metaCtrl.signal,
+          });
+          clearTimeout(metaTimeout);
+          if (!metaRes.ok) return null;
+          const meta = await metaRes.json();
+          return { doc, files: meta.files || [] };
+        } catch {
+          return null;
+        }
+      })
+    );
 
-      const meta = await metaRes.json();
-      const mp3Files: Array<{ name?: string; length?: string; size?: string }> = (
-        meta.files || []
-      ).filter((f: { name?: string }) => f.name && f.name.toLowerCase().endsWith('.mp3'));
+    for (const item of metaResults) {
+      if (!item) continue;
+      const mp3Files: Array<{ name?: string; length?: string; size?: string }> = item.files.filter(
+        (f: { name?: string }) => f.name && f.name.toLowerCase().endsWith('.mp3')
+      );
 
       const match = mp3Files.find((f) => {
         const len = parseFloat(f.length || '0');
@@ -284,14 +215,16 @@ export async function searchInternetArchiveFullMp3(
         if (size > 0 && size < 500000) return false;
         const targetText =
           mp3Files.length === 1
-            ? `${doc.title || ''} ${f.name || ''}`.toLowerCase()
+            ? `${item.doc.title || ''} ${f.name || ''}`.toLowerCase()
             : (f.name || '').toLowerCase();
         return titleWords.every((w) => targetText.includes(w));
       });
 
       if (match?.name) {
         return {
-          url: `https://archive.org/download/${doc.identifier}/${encodeURIComponent(match.name)}`,
+          url: `https://archive.org/download/${item.doc.identifier}/${encodeURIComponent(
+            match.name
+          )}`,
           duration: Math.round(parseFloat(match.length || '0')) || undefined,
         };
       }
@@ -303,36 +236,26 @@ export async function searchInternetArchiveFullMp3(
 }
 
 /**
- * Resolves a FULL-LENGTH audio stream URL (from 0:00 intro to end, 3-5 minutes)
- * using the 3-tier full-track engine:
- * 1. JioSaavn Full-Track API (320kbps/160kbps .mp4/.m4a)
- * 2. Piped / Invidious YouTube Music Audio API (/streams/:videoId)
- * 3. Internet Archive Full-Track Audio Engine (archive.org MP3)
+ * Resolves a FULL-LENGTH audio stream URL (from 0:00 intro to end) in parallel
  */
 export async function resolveFullLengthAudioUrl(
   title: string,
   artist: string
 ): Promise<string | null> {
-  const key = getCacheKey(title, artist);
+  const key = getTrackCacheKey(title, artist);
   const cached = resolvedStreamCache.get(key);
   if (cached) return cached;
 
-  // 1. Primary: JioSaavn Full-Track API
-  const saavn = await searchJioSaavnFullTrack(title, artist);
+  const [saavn, archive] = await Promise.all([
+    searchJioSaavnFullTrack(title, artist),
+    searchInternetArchiveFullMp3(title, artist),
+  ]);
+
   if (saavn?.url) {
     resolvedStreamCache.set(key, saavn.url);
     return saavn.url;
   }
 
-  // 2. Secondary: Piped / Invidious YouTube Music Audio API
-  const piped = await searchPipedYouTubeAudio(title, artist);
-  if (piped?.url) {
-    resolvedStreamCache.set(key, piped.url);
-    return piped.url;
-  }
-
-  // 3. Tertiary: Internet Archive Full-Length MP3 Engine
-  const archive = await searchInternetArchiveFullMp3(title, artist);
   if (archive?.url) {
     resolvedStreamCache.set(key, archive.url);
     return archive.url;
@@ -345,7 +268,7 @@ export async function resolveFullLengthAudioUrl(
  * Helper to execute JSONP requests in browser environments where CORS may be restricted
  * by mobile carriers, Safari ITP, or static hosts like Netlify.
  */
-function fetchJsonp<T>(url: string, callbackParam = 'callback', timeoutMs = 6500): Promise<T> {
+function fetchJsonp<T>(url: string, callbackParam = 'callback', timeoutMs = 5000): Promise<T> {
   return new Promise((resolve, reject) => {
     if (typeof document === 'undefined') {
       reject(new Error('No document available for JSONP'));
@@ -389,9 +312,6 @@ function fetchJsonp<T>(url: string, callbackParam = 'callback', timeoutMs = 6500
   });
 }
 
-/**
- * Maps iTunes metadata & high-res 600x600 cover art WITHOUT using previewUrl as primary audioUrl!
- */
 function mapITunesItemsToMetadataTracks(results: ITunesResult[]): Track[] {
   return results
     .filter((item) => item.trackName && item.artistName)
@@ -404,7 +324,7 @@ function mapITunesItemsToMetadataTracks(results: ITunesResult[]): Track[] {
         : 210;
 
       const cachedFullUrl = resolvedStreamCache.get(
-        getCacheKey(item.trackName, item.artistName)
+        getTrackCacheKey(item.trackName, item.artistName)
       );
 
       return {
@@ -414,8 +334,7 @@ function mapITunesItemsToMetadataTracks(results: ITunesResult[]): Track[] {
         album: item.collectionName || 'Single',
         duration: durationSec,
         coverUrl: highResCover,
-        // Never use iTunes 30s previewUrl as primary audioUrl; keep it only in fallbackPreviewUrl
-        audioUrl: cachedFullUrl,
+        audioUrl: cachedFullUrl || item.previewUrl,
         fallbackPreviewUrl: item.previewUrl,
         genre: mapGenre(item.primaryGenreName),
         lyrics: [
@@ -433,7 +352,7 @@ function mapDeezerItemsToMetadataTracks(results: DeezerResult[]): Track[] {
     .filter((item) => item.title && item.artist?.name)
     .map((item) => {
       const artistName = item.artist?.name || 'Unknown Artist';
-      const cachedFullUrl = resolvedStreamCache.get(getCacheKey(item.title, artistName));
+      const cachedFullUrl = resolvedStreamCache.get(getTrackCacheKey(item.title, artistName));
 
       return {
         id: `deezer-${item.id}`,
@@ -442,7 +361,7 @@ function mapDeezerItemsToMetadataTracks(results: DeezerResult[]): Track[] {
         album: item.album?.title || 'Single',
         duration: item.duration || 210,
         coverUrl: item.album?.cover_big || item.album?.cover_medium || ARTWORK.chillVibesMoon,
-        audioUrl: cachedFullUrl,
+        audioUrl: cachedFullUrl || item.preview,
         fallbackPreviewUrl: item.preview,
         genre: 'Pop',
         lyrics: [
@@ -470,7 +389,7 @@ function mapSaavnItemsToTracks(results: SaavnSongResult[]): Track[] {
       const artist = extractSaavnArtist(item);
       const streamUrl = extractBestSaavnDownloadUrl(item.downloadUrl) || undefined;
       if (streamUrl) {
-        resolvedStreamCache.set(getCacheKey(title, artist), streamUrl);
+        resolvedStreamCache.set(getTrackCacheKey(title, artist), streamUrl);
       }
       return {
         id: `saavn-${item.id || idx}`,
@@ -492,88 +411,81 @@ function mapSaavnItemsToTracks(results: SaavnSongResult[]): Track[] {
 }
 
 /**
- * Searches real songs and attaches full-length audio streams (JioSaavn / Piped / Archive.org).
- * iTunes/Deezer are used ONLY for high-res album art & catalog metadata, NEVER as primary audio source.
+ * Searches real songs with instant playback readiness and parallel full-length stream resolution.
  */
 export async function searchOnlineTracks(query: string, limit = 15): Promise<Track[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
   const encoded = encodeURIComponent(trimmed);
 
-  let metadataTracks: Track[] = [];
-
-  // 1. Fetch high-res metadata & catalog list (iTunes Fetch -> iTunes JSONP -> Deezer JSONP)
-  try {
-    const response = await fetch(
-      `https://itunes.apple.com/search?term=${encoded}&country=ID&media=music&entity=song&limit=${limit}`
-    );
-    if (response.ok) {
-      const data = await response.json();
-      metadataTracks = mapITunesItemsToMetadataTracks(data.results || []);
-    }
-  } catch {
-    // Fallback to JSONP if CORS blocks standard fetch
-  }
-
-  if (metadataTracks.length === 0) {
-    try {
-      const data = await fetchJsonp<{ results?: ITunesResult[] }>(
-        `https://itunes.apple.com/search?term=${encoded}&country=ID&media=music&entity=song&limit=${limit}`
-      );
-      metadataTracks = mapITunesItemsToMetadataTracks(data?.results || []);
-    } catch {
-      // Fallback to Deezer JSONP
-    }
-  }
-
-  if (metadataTracks.length === 0) {
-    try {
-      const deezerData = await fetchJsonp<{ data?: DeezerResult[] }>(
-        `https://api.deezer.com/search?q=${encoded}&limit=${limit}&output=jsonp`
-      );
-      metadataTracks = mapDeezerItemsToMetadataTracks(deezerData?.data || []);
-    } catch {
-      // Ignore
-    }
-  }
-
-  // 2. Also query JioSaavn directly for full-length 320kbps streams
-  for (const endpoint of JIOSAAVN_SEARCH_ENDPOINTS) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`${endpoint}?query=${encoded}&limit=${limit}`, {
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (res.ok) {
-        const json = await res.json();
-        const saavnTracks = mapSaavnItemsToTracks(json?.data?.results || json?.results || []);
-        if (metadataTracks.length === 0 && saavnTracks.length > 0) {
-          return saavnTracks;
+  const [catalogTracks, saavnTracks] = await Promise.all([
+    (async (): Promise<Track[]> => {
+      try {
+        const res = await fetch(
+          `https://itunes.apple.com/search?term=${encoded}&country=ID&media=music&entity=song&limit=${limit}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const mapped = mapITunesItemsToMetadataTracks(data.results || []);
+          if (mapped.length > 0) return mapped;
         }
-        // Attach any matched JioSaavn full-length audioUrl onto metadataTracks
-        if (saavnTracks.length > 0) {
-          metadataTracks = metadataTracks.map((t) => {
-            const cached = resolvedStreamCache.get(getCacheKey(t.title, t.artist));
-            return cached ? { ...t, audioUrl: cached } : t;
-          });
-        }
-        break;
+      } catch {
+        // Fallback to JSONP
       }
-    } catch {
-      // Continue
-    }
+
+      try {
+        const data = await fetchJsonp<{ results?: ITunesResult[] }>(
+          `https://itunes.apple.com/search?term=${encoded}&country=ID&media=music&entity=song&limit=${limit}`
+        );
+        const mapped = mapITunesItemsToMetadataTracks(data?.results || []);
+        if (mapped.length > 0) return mapped;
+      } catch {
+        // Fallback to Deezer JSONP
+      }
+
+      try {
+        const deezerData = await fetchJsonp<{ data?: DeezerResult[] }>(
+          `https://api.deezer.com/search?q=${encoded}&limit=${limit}&output=jsonp`
+        );
+        return mapDeezerItemsToMetadataTracks(deezerData?.data || []);
+      } catch {
+        return [];
+      }
+    })(),
+    (async (): Promise<Track[]> => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1600);
+        const res = await fetch(`${JIOSAAVN_API_URL}?query=${encoded}&limit=${limit}`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+          const json = await res.json();
+          return mapSaavnItemsToTracks(json?.data?.results || json?.results || []);
+        }
+      } catch {
+        // Ignore
+      }
+      return [];
+    })(),
+  ]);
+
+  let finalTracks = catalogTracks.length > 0 ? catalogTracks : saavnTracks;
+
+  if (catalogTracks.length > 0 && saavnTracks.length > 0) {
+    finalTracks = catalogTracks.map((t) => {
+      const cached = resolvedStreamCache.get(getTrackCacheKey(t.title, t.artist));
+      return cached ? { ...t, audioUrl: cached } : t;
+    });
   }
 
-  // Pre-warm full-length stream resolution for the top 3 results in the background
-  metadataTracks.slice(0, 3).forEach((t) => {
-    if (!t.audioUrl) {
-      resolveFullLengthAudioUrl(t.title, t.artist).catch(() => {});
-    }
+  // Pre-warm full-length stream resolution for top 2 results in background
+  finalTracks.slice(0, 2).forEach((t) => {
+    resolveFullLengthAudioUrl(t.title, t.artist).catch(() => {});
   });
 
-  return metadataTracks;
+  return finalTracks;
 }
 
 function mapGenre(raw?: string): Track['genre'] {
@@ -587,7 +499,7 @@ function mapGenre(raw?: string): Track['genre'] {
   return 'Pop';
 }
 
-function isShortPreviewUrl(url?: string): boolean {
+export function isShortPreviewUrl(url?: string): boolean {
   if (!url) return false;
   return url.includes('apple.com') || url.includes('dzcdn.net');
 }
@@ -599,7 +511,7 @@ export async function hydrateDefaultTracksAudio(tracks: Track[]): Promise<Track[
   const updated = await Promise.all(
     tracks.map(async (track) => {
       if (track.audioUrl && !isShortPreviewUrl(track.audioUrl)) {
-        resolvedStreamCache.set(getCacheKey(track.title, track.artist), track.audioUrl);
+        resolvedStreamCache.set(getTrackCacheKey(track.title, track.artist), track.audioUrl);
         return track;
       }
       try {

@@ -29,7 +29,9 @@ import {
   saveTrackOffline,
 } from './services/offlineDb';
 import {
+  getCachedFullLengthUrl,
   hydrateDefaultTracksAudio,
+  isShortPreviewUrl,
   resolveFullLengthAudioUrl,
 } from './services/onlineApi';
 import {
@@ -182,7 +184,7 @@ export default function App() {
     };
   }, []);
 
-  // Resolve full-length audio source and play a specific track from 0:00 (intro)
+  // Instant, zero-delay playback handler that unlocks mobile HTML5 Audio immediately on tap
   const loadAndPlayTrack = useCallback(
     async (track: Track, autoPlay = true) => {
       const audio = audioRef.current;
@@ -212,107 +214,107 @@ export default function App() {
         activeObjectUrlRef.current = null;
       }
 
-      // 1. Offline-First Resolver: Check IndexedDB first!
-      const offlineRecord = await getOfflineTrackRecord(track.id);
-      if (requestId !== playRequestIdRef.current) return;
-
-      if (offlineRecord?.audioBlob) {
-        const blobUrl = URL.createObjectURL(offlineRecord.audioBlob);
-        activeObjectUrlRef.current = blobUrl;
-        audio.src = blobUrl;
-      } else if (navigator.onLine) {
-        // 2. Full-Length Audio Stream Resolver (JioSaavn -> Piped YouTube Music -> Internet Archive)
-        let streamUrl = track.audioUrl;
-        const isShortPreview =
-          streamUrl && (streamUrl.includes('apple.com') || streamUrl.includes('dzcdn.net'));
-
-        if (!streamUrl || isShortPreview) {
-          const fullTrackUrl = await resolveFullLengthAudioUrl(track.title, track.artist);
-          if (requestId !== playRequestIdRef.current) return;
-          if (fullTrackUrl) {
-            streamUrl = fullTrackUrl;
-            // Persist resolved full-length URL onto track state
-            setTracks((prev) =>
-              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullTrackUrl } : t))
-            );
-            setQueue((prev) =>
-              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullTrackUrl } : t))
-            );
-            setCurrentTrack((prev) =>
-              prev.id === track.id ? { ...prev, audioUrl: fullTrackUrl } : prev
-            );
-          } else {
-            // Only use fallbackPreviewUrl if all full-track engines fail
-            streamUrl = streamUrl || track.fallbackPreviewUrl;
-          }
-        }
-
-        if (streamUrl) {
-          audio.src = streamUrl;
-        } else {
-          const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-          const freqs = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0];
-          const wavBlob = generateProceduralWavBlob(freqs[hash % freqs.length], 24);
-          const blobUrl = URL.createObjectURL(wavBlob);
-          activeObjectUrlRef.current = blobUrl;
-          audio.src = blobUrl;
-        }
-      } else {
-        // 3. Offline procedural harmonic chord WAV fallback
+      const playProceduralFallback = async () => {
+        if (requestId !== playRequestIdRef.current) return;
         const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
         const freqs = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0];
         const wavBlob = generateProceduralWavBlob(freqs[hash % freqs.length], 24);
         const blobUrl = URL.createObjectURL(wavBlob);
         activeObjectUrlRef.current = blobUrl;
         audio.src = blobUrl;
-      }
-
-      audio.currentTime = 0;
-
-      if (autoPlay) {
-        try {
-          await audio.play();
-          if (requestId === playRequestIdRef.current) {
-            setIsPlaying(true);
+        audio.currentTime = 0;
+        if (autoPlay) {
+          try {
+            await audio.play();
+            if (requestId === playRequestIdRef.current) setIsPlaying(true);
+          } catch {
+            if (requestId === playRequestIdRef.current) setIsPlaying(false);
           }
-        } catch {
-          if (requestId !== playRequestIdRef.current) return;
-          // If primary stream failed to play, try fallbackPreviewUrl before procedural WAV
-          if (track.fallbackPreviewUrl && audio.src !== track.fallbackPreviewUrl) {
-            try {
-              audio.src = track.fallbackPreviewUrl;
-              audio.currentTime = 0;
-              await audio.play();
-              if (requestId === playRequestIdRef.current) {
-                setIsPlaying(true);
-                return;
-              }
-            } catch {
-              // Fall through to procedural WAV
-            }
-          }
-          if (requestId !== playRequestIdRef.current) return;
-          const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-          const freqs = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0];
-          const wavBlob = generateProceduralWavBlob(freqs[hash % freqs.length], 24);
-          const blobUrl = URL.createObjectURL(wavBlob);
+        }
+      };
+
+      // 1. Check if track is already saved offline in IndexedDB
+      if (track.isOffline || offlineTrackIds.has(track.id)) {
+        const offlineRecord = await getOfflineTrackRecord(track.id);
+        if (requestId !== playRequestIdRef.current) return;
+        if (offlineRecord?.audioBlob) {
+          const blobUrl = URL.createObjectURL(offlineRecord.audioBlob);
           activeObjectUrlRef.current = blobUrl;
           audio.src = blobUrl;
           audio.currentTime = 0;
-          try {
-            await audio.play();
-            if (requestId === playRequestIdRef.current) {
-              setIsPlaying(true);
+          if (autoPlay) {
+            try {
+              await audio.play();
+              if (requestId === playRequestIdRef.current) setIsPlaying(true);
+              return;
+            } catch {
+              // Fall through to online/procedural
             }
-          } catch {
-            if (requestId === playRequestIdRef.current) {
-              setIsPlaying(false);
-            }
+          } else {
+            return;
           }
         }
       }
+
+      // 2. Online Playback: Immediately start playing the fastest available URL within the user tap gesture!
+      if (navigator.onLine) {
+        const cachedFull = getCachedFullLengthUrl(track.title, track.artist);
+        const immediateUrl = cachedFull || track.audioUrl || track.fallbackPreviewUrl;
+
+        if (immediateUrl) {
+          audio.src = immediateUrl;
+          audio.currentTime = 0;
+
+          if (autoPlay) {
+            try {
+              await audio.play();
+              if (requestId === playRequestIdRef.current) {
+                setIsPlaying(true);
+              }
+            } catch {
+              if (requestId !== playRequestIdRef.current) return;
+              // If primary URL failed, immediately try fallbackPreviewUrl before procedural WAV
+              if (track.fallbackPreviewUrl && immediateUrl !== track.fallbackPreviewUrl) {
+                try {
+                  audio.src = track.fallbackPreviewUrl;
+                  audio.currentTime = 0;
+                  await audio.play();
+                  if (requestId === playRequestIdRef.current) {
+                    setIsPlaying(true);
+                  }
+                } catch {
+                  await playProceduralFallback();
+                  return;
+                }
+              } else {
+                await playProceduralFallback();
+                return;
+              }
+            }
+          }
+
+          // If immediateUrl was a short preview, cache the full-length stream in the background for next play/download without interrupting current playback!
+          if (isShortPreviewUrl(immediateUrl)) {
+            resolveFullLengthAudioUrl(track.title, track.artist)
+              .then((fullUrl) => {
+                if (!fullUrl) return;
+                setTracks((prev) =>
+                  prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullUrl } : t))
+                );
+                setQueue((prev) =>
+                  prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullUrl } : t))
+                );
+              })
+              .catch(() => {});
+          }
+          return;
+        }
+      }
+
+      // 3. Offline procedural harmonic chord WAV fallback
+      await playProceduralFallback();
     },
-    []
+    [offlineTrackIds]
   );
 
   // Toggle Play/Pause on current track
