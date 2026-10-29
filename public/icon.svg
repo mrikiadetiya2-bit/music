@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="50%" stop-color="#EEF2FF"/>
+      <stop offset="100%" stop-color="#E0E7FF"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="120" y1="100" x2="392" y2="412" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#60A5FA"/>
+      <stop offset="50%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <g fill="url(#wave)">
+    <rect x="116" y="220" width="28" height="72" rx="14"/>
+    <rect x="166" y="164" width="28" height="184" rx="14"/>
+    <circle cx="230" cy="256" r="16"/>
+    <rect x="266" y="116" width="32" height="280" rx="16"/>
+    <rect x="322" y="176" width="28" height="160" rx="14"/>
+    <rect x="372" y="216" width="28" height="80" rx="14"/>
+  </g>
+</svg>

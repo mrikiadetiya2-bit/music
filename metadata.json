@@ -1,0 +1,6 @@
+{
+  "name": "Musee — Offline Music Player",
+  "description": "Music for a brighter day. A complete offline-first music player PWA for iPhone with IndexedDB audio caching, live iTunes search, synchronized lyrics, and local MP3 import.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
