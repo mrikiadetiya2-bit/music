@@ -1,6 +1,7 @@
 import { OfflineTrackRecord, Playlist, Track } from '../types/music';
 import { generateProceduralWavBlob, parseAudioFilename } from '../utils/musicLogic';
 import { ARTWORK } from '../data/catalog';
+import { resolveFullLengthAudioUrl } from './onlineApi';
 
 const DB_NAME = 'MuseeOfflineDB';
 const DB_VERSION = 1;
@@ -62,10 +63,15 @@ export async function getOfflineTrackRecord(id: string): Promise<OfflineTrackRec
 
 export async function saveTrackOffline(track: Track, explicitBlob?: Blob): Promise<OfflineTrackRecord> {
   let audioBlob = explicitBlob;
+  let resolvedUrl = track.audioUrl;
 
-  if (!audioBlob && track.audioUrl) {
+  if (!audioBlob && !resolvedUrl) {
+    resolvedUrl = (await resolveFullLengthAudioUrl(track.title, track.artist)) || track.fallbackPreviewUrl;
+  }
+
+  if (!audioBlob && resolvedUrl) {
     try {
-      const response = await fetch(track.audioUrl);
+      const response = await fetch(resolvedUrl);
       if (response.ok) {
         audioBlob = await response.blob();
       }

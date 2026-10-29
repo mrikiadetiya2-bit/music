@@ -30,6 +30,7 @@ import {
 } from './services/offlineDb';
 import {
   hydrateDefaultTracksAudio,
+  resolveFullLengthAudioUrl,
 } from './services/onlineApi';
 import {
   computeAudioSeekTime,
@@ -105,7 +106,6 @@ export default function App() {
   const playRequestIdRef = useRef<number>(0);
   const currentTimeRef = useRef<number>(0);
   const durationRef = useRef<number>(INITIAL_TRACKS[0].duration);
-  const lastAudioTimeRef = useRef<number>(0);
   const handleNextTrackRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -123,7 +123,7 @@ export default function App() {
     }, 2800);
   }, []);
 
-  // Load offline tracks & custom playlists from IndexedDB on startup
+  // Load offline tracks & pre-load working full-length audio on startup
   useEffect(() => {
     let mounted = true;
 
@@ -160,7 +160,7 @@ export default function App() {
         });
       }
 
-      // Hydrate any tracks that don't yet have an audioUrl
+      // Pre-load full-length audio URLs for default tracks
       const hydrated = await hydrateDefaultTracksAudio(allCombined);
       if (mounted) {
         const audioMap = new Map(hydrated.map((h) => [h.id, h.audioUrl]));
@@ -182,7 +182,7 @@ export default function App() {
     };
   }, []);
 
-  // Resolve offline-first audio source and play a specific track from 0:00 (intro)
+  // Resolve full-length audio source and play a specific track from 0:00 (intro)
   const loadAndPlayTrack = useCallback(
     async (track: Track, autoPlay = true) => {
       const audio = audioRef.current;
@@ -192,7 +192,7 @@ export default function App() {
 
       // Immediately pause previous playback and reset timer to 0:00 (beginning of track)
       audio.pause();
-      lastAudioTimeRef.current = 0;
+      audio.currentTime = 0;
       setCurrentTrack(track);
       const targetDuration = track.duration || 210;
       setDuration(targetDuration);
@@ -220,10 +220,45 @@ export default function App() {
         const blobUrl = URL.createObjectURL(offlineRecord.audioBlob);
         activeObjectUrlRef.current = blobUrl;
         audio.src = blobUrl;
-      } else if (track.audioUrl && navigator.onLine) {
-        audio.src = track.audioUrl;
+      } else if (navigator.onLine) {
+        // 2. Full-Length Audio Stream Resolver (JioSaavn -> Piped YouTube Music -> Internet Archive)
+        let streamUrl = track.audioUrl;
+        const isShortPreview =
+          streamUrl && (streamUrl.includes('apple.com') || streamUrl.includes('dzcdn.net'));
+
+        if (!streamUrl || isShortPreview) {
+          const fullTrackUrl = await resolveFullLengthAudioUrl(track.title, track.artist);
+          if (requestId !== playRequestIdRef.current) return;
+          if (fullTrackUrl) {
+            streamUrl = fullTrackUrl;
+            // Persist resolved full-length URL onto track state
+            setTracks((prev) =>
+              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullTrackUrl } : t))
+            );
+            setQueue((prev) =>
+              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullTrackUrl } : t))
+            );
+            setCurrentTrack((prev) =>
+              prev.id === track.id ? { ...prev, audioUrl: fullTrackUrl } : prev
+            );
+          } else {
+            // Only use fallbackPreviewUrl if all full-track engines fail
+            streamUrl = streamUrl || track.fallbackPreviewUrl;
+          }
+        }
+
+        if (streamUrl) {
+          audio.src = streamUrl;
+        } else {
+          const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+          const freqs = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0];
+          const wavBlob = generateProceduralWavBlob(freqs[hash % freqs.length], 24);
+          const blobUrl = URL.createObjectURL(wavBlob);
+          activeObjectUrlRef.current = blobUrl;
+          audio.src = blobUrl;
+        }
       } else {
-        // 3. Procedural warm harmonic chord WAV fallback so audio always plays 100% offline
+        // 3. Offline procedural harmonic chord WAV fallback
         const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
         const freqs = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0];
         const wavBlob = generateProceduralWavBlob(freqs[hash % freqs.length], 24);
@@ -242,7 +277,21 @@ export default function App() {
           }
         } catch {
           if (requestId !== playRequestIdRef.current) return;
-          // Fallback to procedural WAV if remote stream fails CORS/network
+          // If primary stream failed to play, try fallbackPreviewUrl before procedural WAV
+          if (track.fallbackPreviewUrl && audio.src !== track.fallbackPreviewUrl) {
+            try {
+              audio.src = track.fallbackPreviewUrl;
+              audio.currentTime = 0;
+              await audio.play();
+              if (requestId === playRequestIdRef.current) {
+                setIsPlaying(true);
+                return;
+              }
+            } catch {
+              // Fall through to procedural WAV
+            }
+          }
+          if (requestId !== playRequestIdRef.current) return;
           const hash = track.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
           const freqs = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0];
           const wavBlob = generateProceduralWavBlob(freqs[hash % freqs.length], 24);
@@ -316,7 +365,6 @@ export default function App() {
     if (queue.length === 0) return;
     if (currentTime > 5 && audioRef.current) {
       audioRef.current.currentTime = 0;
-      lastAudioTimeRef.current = 0;
       setCurrentTime(0);
       currentTimeRef.current = 0;
       return;
@@ -332,12 +380,11 @@ export default function App() {
     const audio = audioRef.current;
     if (audio && audio.src) {
       const safeAudioTime = computeAudioSeekTime(newTime, audio.duration);
-      lastAudioTimeRef.current = safeAudioTime;
       audio.currentTime = safeAudioTime;
     }
   }, []);
 
-  // Initialize HTML5 Audio Element once and wire ref-based listeners so they never go stale
+  // Initialize HTML5 Audio Element once and bind currentTime and duration dynamically via events
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'auto';
@@ -345,36 +392,26 @@ export default function App() {
 
     const handleTimeUpdate = () => {
       const nowAudio = audio.currentTime;
-      const delta = nowAudio - lastAudioTimeRef.current;
-      lastAudioTimeRef.current = nowAudio;
-
-      // Advance virtual track time smoothly by positive audio delta
-      if (delta > 0 && delta < 2) {
-        const nextVirtual = currentTimeRef.current + delta;
-        if (nextVirtual >= durationRef.current) {
-          handleNextTrackRef.current();
-        } else {
-          currentTimeRef.current = nextVirtual;
-          setCurrentTime(nextVirtual);
-        }
+      if (durationRef.current > 0 && nowAudio >= durationRef.current) {
+        handleNextTrackRef.current();
+        return;
       }
+      currentTimeRef.current = nowAudio;
+      setCurrentTime(nowAudio);
     };
 
     const handleLoadedMetadata = () => {
       if (Number.isFinite(audio.duration) && audio.duration > 1) {
-        setDuration((prev) => (prev > 40 ? prev : Math.round(audio.duration)));
+        // Dynamically bind seekbar max duration to actual audio.duration for single-song streams
+        const realDuration = Math.round(audio.duration);
+        if (realDuration >= 60 && realDuration <= 540) {
+          durationRef.current = realDuration;
+          setDuration(realDuration);
+        }
       }
     };
 
     const handleEnded = () => {
-      // If the underlying preview/buffer is shorter than the song's full duration and the song hasn't reached its end yet,
-      // loop the audio buffer seamlessly so the song continues playing through all its lyrics!
-      if (currentTimeRef.current + 3 < durationRef.current) {
-        lastAudioTimeRef.current = 0;
-        audio.currentTime = 0;
-        audio.play().catch(() => {});
-        return;
-      }
       handleNextTrackRef.current();
     };
 

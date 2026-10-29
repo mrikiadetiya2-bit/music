@@ -17,6 +17,7 @@ export interface Track {
   duration: number; // in seconds
   coverUrl: string;
   audioUrl?: string;
+  fallbackPreviewUrl?: string;
   genre: GenreFilter;
   lyrics: LyricLine[];
   isOffline?: boolean;

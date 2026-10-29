@@ -398,10 +398,10 @@ export const INITIAL_TRACKS: Track[] = [
     title: 'Until I Found You',
     artist: 'Stephen Sanchez',
     album: 'Angel Face',
-    duration: 177, // 2:57
+    duration: 176, // 2:56
     coverUrl: ARTWORK.untilIFoundYou,
     audioUrl:
-      'https://archive.org/download/stephen-sanchez-until-i-found-you/Stephen_Sanchez_Until_I_Found_You.mp3',
+      'https://archive.org/download/stephen-sanchez-until-i-found-you-official-video/Stephen%20Sanchez%20-%20Until%20I%20Found%20You%20(Official%20Video).mp3',
     genre: 'Chill',
     lyrics: [
       { time: 0, text: 'Georgia, wrap me up in all your' },
