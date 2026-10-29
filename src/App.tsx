@@ -9,6 +9,7 @@ import {
   DEFAULT_USER_PROFILE,
   INITIAL_PLAYLISTS,
   INITIAL_TRACKS,
+  VERIFIED_FULL_LENGTH_CATALOG,
 } from './data/catalog';
 import {
   GenreFilter,
@@ -31,6 +32,7 @@ import {
 import {
   fetchTrendingRadioQueue,
   getCachedFullLengthUrl,
+  getVerifiedFullLengthFallbackUrl,
   hydrateDefaultTracksAudio,
   isShortPreviewUrl,
   resolveFullLengthAudioUrl,
@@ -111,12 +113,23 @@ export default function App() {
   const currentTimeRef = useRef<number>(0);
   const durationRef = useRef<number>(INITIAL_TRACKS[0].duration);
   const lastAudioTimeRef = useRef<number>(0);
+  const lastAdvanceTimeRef = useRef<number>(0);
   const handleNextTrackRef = useRef<() => void>(() => {});
   const tracksRef = useRef<Track[]>(INITIAL_TRACKS);
+  const currentTrackRef = useRef<Track>(INITIAL_TRACKS[0]);
+  const queueRef = useRef<Track[]>(INITIAL_TRACKS);
 
   useEffect(() => {
     tracksRef.current = tracks;
   }, [tracks]);
+
+  useEffect(() => {
+    currentTrackRef.current = currentTrack;
+  }, [currentTrack]);
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
 
   useEffect(() => {
     currentTimeRef.current = currentTime;
@@ -159,6 +172,7 @@ export default function App() {
       const allCombined = [...customImported, ...mergedInitial];
       setTracks(allCombined);
       setQueue(allCombined);
+      queueRef.current = allCombined;
       if (savedIds.has(INITIAL_TRACKS[0].id)) {
         setCurrentTrack((prev) => ({ ...prev, isOffline: true }));
       }
@@ -170,43 +184,25 @@ export default function App() {
         });
       }
 
-      // Pre-load full-length audio URLs and fallback CDN previews for default tracks
+      // Pre-load full-length audio URLs for default tracks
       const hydrated = await hydrateDefaultTracksAudio(allCombined);
       if (mounted) {
         const hydratedMap = new Map(hydrated.map((h) => [h.id, h]));
         setTracks((prev) =>
           prev.map((t) => {
             const h = hydratedMap.get(t.id);
-            return h
-              ? {
-                  ...t,
-                  audioUrl: h.audioUrl || t.audioUrl,
-                  fallbackPreviewUrl: h.fallbackPreviewUrl || t.fallbackPreviewUrl,
-                }
-              : t;
+            return h ? { ...t, audioUrl: h.audioUrl || t.audioUrl } : t;
           })
         );
         setQueue((prev) =>
           prev.map((t) => {
             const h = hydratedMap.get(t.id);
-            return h
-              ? {
-                  ...t,
-                  audioUrl: h.audioUrl || t.audioUrl,
-                  fallbackPreviewUrl: h.fallbackPreviewUrl || t.fallbackPreviewUrl,
-                }
-              : t;
+            return h ? { ...t, audioUrl: h.audioUrl || t.audioUrl } : t;
           })
         );
         setCurrentTrack((prev) => {
           const h = hydratedMap.get(prev.id);
-          return h
-            ? {
-                ...prev,
-                audioUrl: h.audioUrl || prev.audioUrl,
-                fallbackPreviewUrl: h.fallbackPreviewUrl || prev.fallbackPreviewUrl,
-              }
-            : prev;
+          return h ? { ...prev, audioUrl: h.audioUrl || prev.audioUrl } : prev;
         });
       }
     }
@@ -217,7 +213,47 @@ export default function App() {
     };
   }, []);
 
-  // Instant, zero-delay playback handler that unlocks mobile HTML5 Audio immediately on tap
+  // Helper that plays the audio element and retries once when cross-origin full-length stream finishes buffering
+  const playAudioWithCanPlayRetry = useCallback(
+    async (audio: HTMLAudioElement, requestId: number): Promise<boolean> => {
+      try {
+        await audio.play();
+        return true;
+      } catch {
+        if (requestId !== playRequestIdRef.current) return false;
+        return new Promise<boolean>((resolve) => {
+          let settled = false;
+          const finish = (ok: boolean) => {
+            if (settled) return;
+            settled = true;
+            audio.removeEventListener('canplay', onCanPlay);
+            audio.removeEventListener('error', onError);
+            clearTimeout(timer);
+            resolve(ok);
+          };
+          const onCanPlay = async () => {
+            if (requestId !== playRequestIdRef.current) {
+              finish(false);
+              return;
+            }
+            try {
+              await audio.play();
+              finish(true);
+            } catch {
+              finish(false);
+            }
+          };
+          const onError = () => finish(false);
+          const timer = setTimeout(() => finish(false), 3500);
+          audio.addEventListener('canplay', onCanPlay, { once: true });
+          audio.addEventListener('error', onError, { once: true });
+        });
+      }
+    },
+    []
+  );
+
+  // Instant, full-length playback handler that always plays from 0:00 intro to the end
   const loadAndPlayTrack = useCallback(
     async (track: Track, autoPlay = true, fromSearch = false) => {
       const audio = audioRef.current;
@@ -227,10 +263,10 @@ export default function App() {
 
       // Immediately pause previous playback and reset timer to 0:00 (beginning of track)
       audio.pause();
-      audio.currentTime = 0;
       lastAudioTimeRef.current = 0;
+      currentTrackRef.current = track;
       setCurrentTrack(track);
-      const targetDuration = track.duration || 210;
+      const targetDuration = track.duration && track.duration >= 60 ? track.duration : 210;
       setDuration(targetDuration);
       durationRef.current = targetDuration;
       setCurrentTime(0);
@@ -243,14 +279,21 @@ export default function App() {
       setTracks((prev) => (prev.some((t) => t.id === track.id) ? prev : [track, ...prev]));
 
       if (fromSearch) {
-        // Immediately reorder queue to match the searched track's language & genre
-        setQueue((prev) => buildImmediateSimilarQueue(track, [...tracksRef.current, ...prev]));
+        // Immediately build queue from verified full-length catalog matching the searched track's language & genre
+        const immediateQueue = buildImmediateSimilarQueue(track, [
+          ...VERIFIED_FULL_LENGTH_CATALOG,
+          ...tracksRef.current,
+          ...queueRef.current,
+        ]);
+        queueRef.current = immediateQueue;
+        setQueue(immediateQueue);
 
-        // In the background, fetch varied trending songs of the exact same language & genre
+        // In the background, fetch varied trending full-length songs of the exact same language & genre
         if (navigator.onLine) {
           fetchTrendingRadioQueue(track, tracksRef.current)
             .then((trendingQueue) => {
               if (requestId !== playRequestIdRef.current || trendingQueue.length === 0) return;
+              queueRef.current = trendingQueue;
               setQueue(trendingQueue);
               setTracks((prev) => {
                 const existingIds = new Set(prev.map((t) => t.id));
@@ -261,7 +304,11 @@ export default function App() {
             .catch(() => {});
         }
       } else {
-        setQueue((prev) => (prev.some((t) => t.id === track.id) ? prev : [track, ...prev]));
+        setQueue((prev) => {
+          const updated = prev.some((t) => t.id === track.id) ? prev : [track, ...prev];
+          queueRef.current = updated;
+          return updated;
+        });
       }
 
       if (activeObjectUrlRef.current) {
@@ -278,7 +325,6 @@ export default function App() {
         const blobUrl = URL.createObjectURL(wavBlob);
         activeObjectUrlRef.current = blobUrl;
         audio.src = blobUrl;
-        audio.currentTime = 0;
         lastAudioTimeRef.current = 0;
         if (autoPlay) {
           try {
@@ -299,15 +345,12 @@ export default function App() {
           const blobUrl = URL.createObjectURL(offlineRecord.audioBlob);
           activeObjectUrlRef.current = blobUrl;
           audio.src = blobUrl;
-          audio.currentTime = 0;
           lastAudioTimeRef.current = 0;
           if (autoPlay) {
-            try {
-              await audio.play();
-              if (requestId === playRequestIdRef.current) setIsPlaying(true);
+            const ok = await playAudioWithCanPlayRetry(audio, requestId);
+            if (ok && requestId === playRequestIdRef.current) {
+              setIsPlaying(true);
               return;
-            } catch {
-              // Fall through to online/procedural
             }
           } else {
             return;
@@ -315,98 +358,83 @@ export default function App() {
         }
       }
 
-      // 2. Online Playback: Always prioritize full-length stream starting from 0:00 (beginning of song)
+      // 2. Online Playback: ALWAYS resolve and play a FULL-LENGTH stream starting from 0:00 (never a 30s chorus preview)
       if (navigator.onLine) {
         const cachedFull = getCachedFullLengthUrl(track.title, track.artist);
         const existingFull =
           track.audioUrl && !isShortPreviewUrl(track.audioUrl) ? track.audioUrl : undefined;
         let fullUrl = cachedFull || existingFull;
-        const previewFallback =
-          track.fallbackPreviewUrl ||
-          (track.audioUrl && isShortPreviewUrl(track.audioUrl) ? track.audioUrl : undefined);
 
-        // If we don't have the full-length stream cached yet, silently unlock mobile audio gesture
-        // while resolving the full-length stream (JioSaavn / Archive.org) so the song starts at 0:00 intro!
         if (!fullUrl) {
-          if (autoPlay && previewFallback) {
-            try {
-              audio.muted = true;
-              audio.src = previewFallback;
-              audio.currentTime = 0;
-              audio.play().catch(() => {});
-            } catch {
-              // Ignore silent gesture primer errors
-            }
-          }
-
           const resolved = await resolveFullLengthAudioUrl(track.title, track.artist);
-          if (requestId !== playRequestIdRef.current) {
-            audio.muted = false;
-            return;
-          }
+          if (requestId !== playRequestIdRef.current) return;
           if (resolved) {
             fullUrl = resolved;
-            setTracks((prev) =>
-              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: resolved } : t))
-            );
-            setQueue((prev) =>
-              prev.map((t) => (t.id === track.id ? { ...t, audioUrl: resolved } : t))
-            );
-            setCurrentTrack((prev) => (prev.id === track.id ? { ...prev, audioUrl: resolved } : prev));
           }
+        }
+
+        if (!fullUrl) {
+          fullUrl = getVerifiedFullLengthFallbackUrl(track.title, track.artist);
+        }
+
+        // Persist the resolved full-length stream on the track object in state and refs
+        setTracks((prev) =>
+          prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullUrl } : t))
+        );
+        setQueue((prev) => {
+          const updated = prev.map((t) => (t.id === track.id ? { ...t, audioUrl: fullUrl } : t));
+          queueRef.current = updated;
+          return updated;
+        });
+        setCurrentTrack((prev) => (prev.id === track.id ? { ...prev, audioUrl: fullUrl } : prev));
+
+        // Pre-resolve the next 2 tracks in queue in the background so auto-advance has 0ms wait
+        const nextIdx1 = getNextTrackIndex(queueRef.current, track.id);
+        const nextTrack1 = queueRef.current[nextIdx1];
+        if (nextTrack1 && nextTrack1.id !== track.id) {
+          resolveFullLengthAudioUrl(nextTrack1.title, nextTrack1.artist).catch(() => {});
         }
 
         audio.muted = false;
-        const primaryUrl = fullUrl || previewFallback;
+        audio.src = fullUrl;
+        lastAudioTimeRef.current = 0;
+        setCurrentTime(0);
+        currentTimeRef.current = 0;
 
-        if (primaryUrl) {
-          audio.src = primaryUrl;
-          audio.currentTime = 0;
-          lastAudioTimeRef.current = 0;
-          setCurrentTime(0);
-          currentTimeRef.current = 0;
+        if (autoPlay) {
+          const playedPrimary = await playAudioWithCanPlayRetry(audio, requestId);
+          if (requestId !== playRequestIdRef.current) return;
+          if (playedPrimary) {
+            setIsPlaying(true);
+            return;
+          }
 
-          if (autoPlay) {
-            try {
-              await audio.play();
-              if (requestId === playRequestIdRef.current) {
-                setIsPlaying(true);
-              }
+          // If the primary Archive.org/Saavn CDN node timed out, try a verified full-length fallback track
+          const backupFullUrl = getVerifiedFullLengthFallbackUrl(track.title, track.artist);
+          if (backupFullUrl && backupFullUrl !== fullUrl) {
+            audio.muted = false;
+            audio.src = backupFullUrl;
+            lastAudioTimeRef.current = 0;
+            setCurrentTime(0);
+            currentTimeRef.current = 0;
+            const playedBackup = await playAudioWithCanPlayRetry(audio, requestId);
+            if (requestId !== playRequestIdRef.current) return;
+            if (playedBackup) {
+              setIsPlaying(true);
               return;
-            } catch {
-              if (requestId !== playRequestIdRef.current) return;
-              // If primary full URL (e.g. archive.org) is blocked by mobile ISP, try fallbackPreviewUrl
-              if (previewFallback && primaryUrl !== previewFallback) {
-                try {
-                  audio.muted = false;
-                  audio.src = previewFallback;
-                  audio.currentTime = 0;
-                  lastAudioTimeRef.current = 0;
-                  setCurrentTime(0);
-                  currentTimeRef.current = 0;
-                  await audio.play();
-                  if (requestId === playRequestIdRef.current) {
-                    setIsPlaying(true);
-                  }
-                  return;
-                } catch {
-                  await playProceduralFallback();
-                  return;
-                }
-              } else {
-                await playProceduralFallback();
-                return;
-              }
             }
           }
+
+          await playProceduralFallback();
           return;
         }
+        return;
       }
 
       // 3. Offline procedural harmonic chord WAV fallback
       await playProceduralFallback();
     },
-    [offlineTrackIds]
+    [offlineTrackIds, playAudioWithCanPlayRetry]
   );
 
   // Toggle Play/Pause on current track
@@ -419,37 +447,40 @@ export default function App() {
       setIsPlaying(false);
     } else {
       if (!audio.src) {
-        await loadAndPlayTrack(currentTrack, true);
+        await loadAndPlayTrack(currentTrackRef.current, true);
       } else {
         try {
           audio.muted = false;
           await audio.play();
           setIsPlaying(true);
         } catch {
-          await loadAndPlayTrack(currentTrack, true);
+          await loadAndPlayTrack(currentTrackRef.current, true);
         }
       }
     }
-  }, [isPlaying, currentTrack, loadAndPlayTrack]);
+  }, [isPlaying, loadAndPlayTrack]);
 
   const handleNextTrack = useCallback(() => {
-    if (queue.length === 0) return;
+    const activeQueue = queueRef.current;
+    const activeTrack = currentTrackRef.current;
+    if (activeQueue.length === 0) return;
+
     if (isRepeat) {
-      loadAndPlayTrack(currentTrack, true);
+      loadAndPlayTrack(activeTrack, true);
       return;
     }
-    if (isShuffle && queue.length > 1) {
-      const others = queue.filter((t) => t.id !== currentTrack.id);
+    if (isShuffle && activeQueue.length > 1) {
+      const others = activeQueue.filter((t) => t.id !== activeTrack.id);
       const randomNext = others[Math.floor(Math.random() * others.length)];
       loadAndPlayTrack(randomNext, true);
       return;
     }
-    const nextIdx = getNextTrackIndex(queue, currentTrack.id);
-    const nextTrack = queue[nextIdx];
+    const nextIdx = getNextTrackIndex(activeQueue, activeTrack.id);
+    const nextTrack = activeQueue[nextIdx];
     if (nextTrack) {
       loadAndPlayTrack(nextTrack, true);
     }
-  }, [queue, currentTrack, isRepeat, isShuffle, loadAndPlayTrack]);
+  }, [isRepeat, isShuffle, loadAndPlayTrack]);
 
   // Keep handleNextTrackRef always pointing to the latest closure!
   useEffect(() => {
@@ -457,7 +488,9 @@ export default function App() {
   }, [handleNextTrack]);
 
   const handlePrevTrack = useCallback(() => {
-    if (queue.length === 0) return;
+    const activeQueue = queueRef.current;
+    const activeTrack = currentTrackRef.current;
+    if (activeQueue.length === 0) return;
     if (currentTime > 5 && audioRef.current) {
       audioRef.current.currentTime = 0;
       lastAudioTimeRef.current = 0;
@@ -465,10 +498,10 @@ export default function App() {
       currentTimeRef.current = 0;
       return;
     }
-    const idx = queue.findIndex((t) => t.id === currentTrack.id);
-    const prevIdx = idx === -1 ? 0 : (idx - 1 + queue.length) % queue.length;
-    loadAndPlayTrack(queue[prevIdx], true);
-  }, [queue, currentTrack.id, currentTime, loadAndPlayTrack]);
+    const idx = activeQueue.findIndex((t) => t.id === activeTrack.id);
+    const prevIdx = idx === -1 ? 0 : (idx - 1 + activeQueue.length) % activeQueue.length;
+    loadAndPlayTrack(activeQueue[prevIdx], true);
+  }, [currentTime, loadAndPlayTrack]);
 
   const handleSeek = useCallback((newTime: number) => {
     setCurrentTime(newTime);
@@ -481,11 +514,18 @@ export default function App() {
     }
   }, []);
 
-  // Initialize HTML5 Audio Element once and bind real playback position without looping short clips
+  // Initialize HTML5 Audio Element once and bind real full-length playback position
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'auto';
     audioRef.current = audio;
+
+    const triggerSafeAutoAdvance = () => {
+      const now = Date.now();
+      if (now - lastAdvanceTimeRef.current < 1200) return;
+      lastAdvanceTimeRef.current = now;
+      handleNextTrackRef.current();
+    };
 
     const handleTimeUpdate = () => {
       if (audio.muted) return;
@@ -493,8 +533,15 @@ export default function App() {
       if (!Number.isFinite(nowAudio) || nowAudio < 0) return;
       lastAudioTimeRef.current = nowAudio;
 
-      if (durationRef.current > 0 && nowAudio >= durationRef.current) {
-        handleNextTrackRef.current();
+      // Only force early track transition when playing a multi-song album file (>540s)
+      // that has reached the first track's duration; single-song streams finish via `ended`.
+      if (
+        durationRef.current > 0 &&
+        nowAudio >= durationRef.current &&
+        Number.isFinite(audio.duration) &&
+        audio.duration > 540
+      ) {
+        triggerSafeAutoAdvance();
         return;
       }
       currentTimeRef.current = nowAudio;
@@ -505,9 +552,9 @@ export default function App() {
       if (audio.muted) return;
       if (Number.isFinite(audio.duration) && audio.duration > 1) {
         const realDuration = Math.round(audio.duration);
-        // Sync duration to actual playable stream length (single song or fallback stream),
-        // while keeping track.duration for multi-song album files (>540s) so they advance after the first song
-        if (realDuration >= 15 && realDuration <= 540) {
+        // Sync duration to actual playable full-length song duration (60s - 540s),
+        // while keeping track.duration for multi-song album files (>540s)
+        if (realDuration >= 60 && realDuration <= 540) {
           durationRef.current = realDuration;
           setDuration(realDuration);
         }
@@ -516,8 +563,7 @@ export default function App() {
 
     const handleEnded = () => {
       if (audio.muted) return;
-      // Advance cleanly to the next song when the stream ends (never loop a short preview snippet over and over)
-      handleNextTrackRef.current();
+      triggerSafeAutoAdvance();
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
@@ -534,6 +580,7 @@ export default function App() {
       }
     };
   }, []);
+
 
   // Configure iOS Lock Screen & Dynamic Island MediaSession API
   useEffect(() => {

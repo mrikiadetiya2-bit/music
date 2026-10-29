@@ -191,5 +191,35 @@ test('buildImmediateSimilarQueue prioritizes tracks with same language and genre
   assert.equal(result[1].id, 'id-pop');
   assert.equal(result[2].id, 'id-indie');
   assert.equal(result[3].id, 'en-pop');
+
+  // Verify 30-second preview URLs (apple.com / dzcdn.net) are filtered out of upcoming queue when full-length tracks exist
+  const mixedCandidates: Track[] = [
+    {
+      id: 'short-preview-track',
+      title: 'Bunga Hati',
+      artist: 'Sal Priadi',
+      album: 'Single',
+      duration: 210,
+      coverUrl: '',
+      audioUrl: 'https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview123/preview.m4a',
+      genre: 'Pop',
+      lyrics: [],
+    },
+    {
+      id: 'full-length-track',
+      title: 'Lantas',
+      artist: 'Juicy Luicy',
+      album: 'Sentimental',
+      duration: 234,
+      coverUrl: '',
+      audioUrl: 'https://archive.org/download/runtuh-feby-putri-feat.-fiersa-besari/Juicy%20Luicy%20-%20Lantas.mp3',
+      genre: 'Pop',
+      lyrics: [],
+    },
+  ];
+  const filteredQueue = buildImmediateSimilarQueue(seed, mixedCandidates);
+  assert.equal(filteredQueue.length, 2);
+  assert.equal(filteredQueue[1].id, 'full-length-track');
 });
+
 

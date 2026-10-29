@@ -241,6 +241,11 @@ const INDONESIAN_ARTIST_KEYWORDS = [
   'mahalini',
   'hindia',
   'fiersa',
+  'feby putri',
+  'soegi bornean',
+  'nadhif',
+  'lomba sihir',
+  'diskoria',
   'juicy luicy',
   'tiara andini',
   'lyodra',
@@ -606,8 +611,17 @@ export function getTrendingSeedArtistsForTrack(
 }
 
 /**
+ * Returns true if an audio URL is a 30-second chorus preview from iTunes or Deezer
+ */
+export function isPreviewOnlyAudioUrl(url?: string): boolean {
+  if (!url) return false;
+  return url.includes('apple.com') || url.includes('dzcdn.net');
+}
+
+/**
  * Builds an immediate smart radio queue starting with `seedTrack`, followed by tracks
- * that match the same language and genre (prioritizing varied trending artists).
+ * that match the same language and genre (prioritizing varied trending artists) and
+ * guaranteeing full-length audio tracks over 30-second previews.
  */
 export function buildImmediateSimilarQueue(
   seedTrack: Track,
@@ -616,7 +630,7 @@ export function buildImmediateSimilarQueue(
   const targetLang = detectTrackLanguage(seedTrack);
   const seedArtist = seedTrack.artist.split(',')[0].trim().toLowerCase();
 
-  const others = candidateTracks.filter(
+  const rawOthers = candidateTracks.filter(
     (t) =>
       t.id !== seedTrack.id &&
       !(
@@ -624,6 +638,10 @@ export function buildImmediateSimilarQueue(
         t.artist.toLowerCase() === seedTrack.artist.toLowerCase()
       )
   );
+
+  // Exclude 30-second preview tracks from the upcoming radio queue whenever full-length tracks exist
+  const fullLengthOthers = rawOthers.filter((t) => !isPreviewOnlyAudioUrl(t.audioUrl));
+  const others = fullLengthOthers.length > 0 ? fullLengthOthers : rawOthers;
 
   // Tier 1: Same language AND same genre, different artist (varied trending)
   const tier1 = others.filter(
@@ -665,3 +683,4 @@ export function buildImmediateSimilarQueue(
 
   return deduped;
 }
+

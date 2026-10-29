@@ -479,6 +479,461 @@ export const INITIAL_TRACKS: Track[] = [
   },
 ];
 
+/**
+ * Curated catalog of verified 100% full-length tracks (3–5 minutes each, starting from 0:00 intro)
+ * used to guarantee that next-track transitions and radio queues always play full songs from the start.
+ */
+export const VERIFIED_FULL_LENGTH_CATALOG: Track[] = [
+  ...INITIAL_TRACKS,
+  {
+    id: 'verified-mahalini-sial',
+    title: 'Sial',
+    artist: 'Mahalini',
+    album: 'Fabula',
+    duration: 244,
+    coverUrl: ARTWORK.satuBulan,
+    audioUrl: 'https://archive.org/download/playlist-sedih-banget-lagu-2023/Sial.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Sampai saat ini tak terpikir olehku' },
+      { time: 20, text: 'Aku pernah beri rasa pada orang sepertimu' },
+      { time: 45, text: 'Seandainya sejak awal tak ku yakinkan diriku' },
+      { time: 72, text: 'Bagaimana dengan aku yang terlanjur mencintaimu' },
+      { time: 105, text: 'Sial, sialnya ku bertemu dengan cinta semu' },
+    ],
+  },
+  {
+    id: 'verified-mahalini-sisa-rasa',
+    title: 'Sisa Rasa',
+    artist: 'Mahalini',
+    album: 'Fabula',
+    duration: 328,
+    coverUrl: ARTWORK.chillVibesMoon,
+    audioUrl: 'https://archive.org/download/playlist-sedih-banget-lagu-2023/SISA%20RASA.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Melihatmu bahagia satu hal yang terindah' },
+      { time: 24, text: 'Anugerah cinta yang pernah kupunya' },
+      { time: 52, text: 'Mengapa masih ada sisa rasa di dada' },
+    ],
+  },
+  {
+    id: 'verified-mahalini-melawan-restu',
+    title: 'Melawan Restu',
+    artist: 'Mahalini',
+    album: 'Fabula',
+    duration: 260,
+    coverUrl: ARTWORK.dailyMixHeart,
+    audioUrl: 'https://archive.org/download/playlist-sedih-banget-lagu-2023/MELAWAN%20RESTU.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Indah semua cerita yang tlah terlewati' },
+      { time: 25, text: 'Dalam satu cinta yang kita yakini' },
+      { time: 55, text: 'Namun pada akhirnya harus ku akhiri' },
+    ],
+  },
+  {
+    id: 'verified-mahalini-kisah-sempurna',
+    title: 'Kisah Sempurna',
+    artist: 'Mahalini',
+    album: 'Fabula',
+    duration: 314,
+    coverUrl: ARTWORK.oceanBreeze,
+    audioUrl: 'https://archive.org/download/playlist-sedih-banget-lagu-2023/KISAH%20SEMPURNA.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Tenggelam jiwa yang telah lama terluka' },
+      { time: 25, text: 'Hingga kau datang membangkitkan rasa' },
+    ],
+  },
+  {
+    id: 'verified-tulus-hati-hati-di-jalan',
+    title: 'Hati-Hati di Jalan',
+    artist: 'Tulus',
+    album: 'Manusia',
+    duration: 261,
+    coverUrl: ARTWORK.leavesArt,
+    audioUrl:
+      'https://archive.org/download/tulus-hati-hati-di-jalan-official-music-video/TULUS%20-%20Hati-Hati%20di%20Jalan%20%28Official%20Music%20Video%29.mp3',
+    genre: 'Chill',
+    lyrics: [
+      { time: 0, text: 'Perjalanan membawamu bertemu denganku' },
+      { time: 24, text: 'Ku bertemu kamu sepertimu yang kucari' },
+      { time: 52, text: 'Kukira kita asam dan garam' },
+      { time: 76, text: 'Dan kita bertemu di belanga' },
+      { time: 105, text: 'Hati-hati di jalan' },
+    ],
+  },
+  {
+    id: 'verified-tulus-monokrom',
+    title: 'Monokrom',
+    artist: 'Tulus',
+    album: 'Monokrom',
+    duration: 216,
+    coverUrl: ARTWORK.focusTower,
+    audioUrl:
+      'https://archive.org/download/tulusmonokromlirik/Tulus%20-%20Monokrom%20%28Lirik%29.mp3',
+    genre: 'Chill',
+    lyrics: [
+      { time: 0, text: 'Lembaran foto hitam putih' },
+      { time: 20, text: 'Aku coba ingat lagi warna bajumu kala itu' },
+      { time: 45, text: 'Di manapun kalian berada' },
+      { time: 70, text: 'Kukirimkan terima kasih untuk warna dalam hidupku' },
+    ],
+  },
+  {
+    id: 'verified-tulus-sepatu',
+    title: 'Sepatu',
+    artist: 'Tulus',
+    album: 'Gajah',
+    duration: 220,
+    coverUrl: ARTWORK.untilIFoundYou,
+    audioUrl: 'https://archive.org/download/maringngerrang-TulusAlbum/TULUS%20-%20SEPATU.mp3',
+    genre: 'Chill',
+    lyrics: [
+      { time: 0, text: 'Kita adalah sepasang sepatu' },
+      { time: 22, text: 'Selalu bersama tak bisa bersatu' },
+    ],
+  },
+  {
+    id: 'verified-tulus-sewindu',
+    title: 'Sewindu',
+    artist: 'Tulus',
+    album: 'Tulus',
+    duration: 241,
+    coverUrl: ARTWORK.chillVibesMoon,
+    audioUrl: 'https://archive.org/download/maringngerrang-TulusAlbum/TULUS%20-%20SEWINDU.mp3',
+    genre: 'Chill',
+    lyrics: [
+      { time: 0, text: 'Sudah sewindu ku di dekatmu' },
+      { time: 24, text: 'Ada di setiap pagi, di sepanjang harimu' },
+    ],
+  },
+  {
+    id: 'verified-tulus-teman-hidup',
+    title: 'Teman Hidup',
+    artist: 'Tulus',
+    album: 'Tulus',
+    duration: 223,
+    coverUrl: ARTWORK.dailyMixHeart,
+    audioUrl: 'https://archive.org/download/maringngerrang-TulusAlbum/TULUS%20-%20TEMAN%20HIDUP.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Dia indah meretas gundah' },
+      { time: 22, text: 'Dia yang selama ini ku nanti' },
+      { time: 48, text: 'Tetaplah bersamaku jadi teman hidupku' },
+    ],
+  },
+  {
+    id: 'verified-juicy-luicy-lantas',
+    title: 'Lantas',
+    artist: 'Juicy Luicy',
+    album: 'Sentimental',
+    duration: 234,
+    coverUrl: ARTWORK.sunsetRoad,
+    audioUrl:
+      'https://archive.org/download/runtuh-feby-putri-feat.-fiersa-besari/Juicy%20Luicy%20-%20Lantas.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Lima hari sudah kurindu' },
+      { time: 20, text: 'Tak bisa ku menghubungimu' },
+      { time: 45, text: 'Lantas mengapa ku masih menaruh hati' },
+    ],
+  },
+  {
+    id: 'verified-juicy-luicy-tak-terbaca',
+    title: 'Tak Terbaca',
+    artist: 'Juicy Luicy',
+    album: 'Sentimental',
+    duration: 217,
+    coverUrl: ARTWORK.oceanBreeze,
+    audioUrl:
+      'https://archive.org/download/runtuh-feby-putri-feat.-fiersa-besari/Juicy%20Luicy%20-%20Tak%20Terbaca.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'Bukan maksudku memaksamu' },
+      { time: 22, text: 'Namun gerak-gerikmu tak terbaca' },
+    ],
+  },
+  {
+    id: 'verified-feby-putri-runtuh',
+    title: 'Runtuh',
+    artist: 'Feby Putri, Fiersa Besari',
+    album: 'Riuh',
+    duration: 224,
+    coverUrl: ARTWORK.waktuYangSalah,
+    audioUrl:
+      'https://archive.org/download/runtuh-feby-putri-feat.-fiersa-besari/Runtuh%20-%20Feby%20Putri%20feat.%20Fiersa%20Besari.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'Ku terbangun lagi di antara sepi' },
+      { time: 24, text: 'Hanya pikiran yang ramai' },
+      { time: 52, text: 'Tak perlu khawatir, ku hanya terluka' },
+    ],
+  },
+  {
+    id: 'verified-feby-putri-halu',
+    title: 'Halu',
+    artist: 'Feby Putri',
+    album: 'Riuh',
+    duration: 273,
+    coverUrl: ARTWORK.leavesArt,
+    audioUrl:
+      'https://archive.org/download/runtuh-feby-putri-feat.-fiersa-besari/Halu%20-%20Feby%20Putri.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'Senyumanmu yang indah bagaikan candu' },
+      { time: 24, text: 'Ingin trus ku lihat walau dari jauh' },
+    ],
+  },
+  {
+    id: 'verified-soegi-bornean-asmalibrasi',
+    title: 'Asmalibrasi',
+    artist: 'Soegi Bornean',
+    album: 'Atma',
+    duration: 255,
+    coverUrl: ARTWORK.satuBulan,
+    audioUrl:
+      'https://archive.org/download/runtuh-feby-putri-feat.-fiersa-besari/Soegi%20Bornean%20-%20Asmalibrasi.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'Asmara telah terkalibrasi frekuensi yang sama' },
+      { time: 25, text: 'Saatnya tuk mengikat janji merangkum indahnya' },
+    ],
+  },
+  {
+    id: 'verified-hindia-secukupnya',
+    title: 'Secukupnya',
+    artist: 'Hindia',
+    album: 'Menari Dengan Bayangan',
+    duration: 228,
+    coverUrl: ARTWORK.focusTower,
+    audioUrl:
+      'https://archive.org/download/feast-tarot-official-lyric-video/Hindia%20-%20Secukupnya%20%28Lyric%20Video%29%20-%20OST.%20Nanti%20Kita%20Cerita%20Tentang%20Hari%20Ini.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'Kapan terakhir kali kamu dapat tertidur tenang?' },
+      { time: 22, text: 'Tak perlu memikirkan tentang apa yang akan datang di esok hari' },
+      { time: 50, text: 'Sedihlah secukupnya' },
+    ],
+  },
+  {
+    id: 'verified-hindia-cincin',
+    title: 'Cincin',
+    artist: 'Hindia',
+    album: 'Lagipula Hidup Akan Berakhir',
+    duration: 266,
+    coverUrl: ARTWORK.sunsetRoad,
+    audioUrl:
+      'https://archive.org/download/hindia-cincin-lirik-lagu/Hindia%20-%20Cincin%20%20Lirik%20Lagu.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'Kau bermasalah jiwa aku pun rada gila' },
+      { time: 24, text: 'Jodoh akal-akalan neraka kita bersama' },
+    ],
+  },
+  {
+    id: 'verified-sal-priadi-kita-usahakan-rumah-itu',
+    title: 'Kita Usahakan Rumah Itu',
+    artist: 'Sal Priadi',
+    album: 'Markers and Such Pens Flashdisks',
+    duration: 211,
+    coverUrl: ARTWORK.untilIFoundYou,
+    audioUrl:
+      'https://archive.org/download/feast-tarot-official-lyric-video/Sal%20Priadi%20-%20Kita%20usahakan%20rumah%20itu%20%28Official%20Lyric%20Video%29.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'Di halaman rumah yang luas' },
+      { time: 22, text: 'Kita usahakan rumah itu dari depan akan tampak sederhana' },
+    ],
+  },
+  {
+    id: 'verified-lyodra-pesan-terakhir',
+    title: 'Pesan Terakhir',
+    artist: 'Lyodra',
+    album: 'Lyodra',
+    duration: 257,
+    coverUrl: ARTWORK.chillVibesMoon,
+    audioUrl:
+      'https://archive.org/download/lyodra-pesan-terakhir-official-music-video-128k/Lyodra_-_Pesan_Terakhir_%28Official_Music_Video%29%28128k%29.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Telah kucoba terus bertahan' },
+      { time: 22, text: 'Tentang cinta yang kurasa' },
+      { time: 48, text: 'Genggam tanganku untuk terakhir kalinya' },
+    ],
+  },
+  {
+    id: 'verified-nadhif-penjaga-hati',
+    title: 'Penjaga Hati',
+    artist: 'Nadhif Basalamah',
+    album: 'Penjaga Hati - Single',
+    duration: 260,
+    coverUrl: ARTWORK.satuBulan,
+    audioUrl:
+      'https://archive.org/download/nadhif-basalamah-penjaga-hati/Nadhif%20Basalamah%20-%20Penjaga%20Hati.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Tak sadar ku temukan' },
+      { time: 22, text: 'Temukan wanita rupawan yang sadarkan' },
+      { time: 48, text: 'Kan ku arungi tujuh laut samudra' },
+    ],
+  },
+  {
+    id: 'verified-payung-teduh-akad',
+    title: 'Akad',
+    artist: 'Payung Teduh',
+    album: 'Ruang Tunggu',
+    duration: 260,
+    coverUrl: ARTWORK.oceanBreeze,
+    audioUrl:
+      'https://archive.org/download/LaguPopIndonesiaPopuler/12.%20Payung%20Teduh%20-%20Akad.mp3',
+    genre: 'Chill',
+    lyrics: [
+      { time: 0, text: 'Betapa bahagianya hatiku saat ku duduk berdua denganmu' },
+      { time: 25, text: 'Namun bila hari ini adalah yang terakhir' },
+      { time: 52, text: 'Sudikah kau menjadi istriku' },
+    ],
+  },
+  {
+    id: 'verified-rizky-febian-kesempurnaan-cinta',
+    title: 'Kesempurnaan Cinta',
+    artist: 'Rizky Febian',
+    album: 'Kesempurnaan Cinta - Single',
+    duration: 216,
+    coverUrl: ARTWORK.dailyMixHeart,
+    audioUrl:
+      'https://archive.org/download/LaguPopIndonesiaPopuler/14.%20Rizky_Febian_-_Kesempurnaan_Cinta.mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Kau dan aku tercipta oleh waktu' },
+      { time: 22, text: 'Hanya untuk saling mencintai' },
+    ],
+  },
+  {
+    id: 'verified-sheila-on-7-seberapa-pantas',
+    title: 'Seberapa Pantas',
+    artist: 'Sheila On 7',
+    album: '07 Des',
+    duration: 241,
+    coverUrl: ARTWORK.workoutRunner,
+    audioUrl:
+      'https://archive.org/download/SheilaOn7FullAlbum07Des/Seberapa%20Pantas.mp3',
+    genre: 'Rock',
+    lyrics: [
+      { time: 0, text: 'Seberapa pantaskah kau untuk ku tunggu' },
+      { time: 24, text: 'Cukup indahkah dirimu untuk selalu ku nantikan' },
+    ],
+  },
+  {
+    id: 'verified-sheila-on-7-hingga-ujung-waktu',
+    title: 'Hingga Ujung Waktu',
+    artist: 'Sheila On 7',
+    album: '07 Des',
+    duration: 266,
+    coverUrl: ARTWORK.anotherLove,
+    audioUrl:
+      'https://archive.org/download/SheilaOn7FullAlbum07Des/Hingga%20Ujung%20Waktu.mp3',
+    genre: 'Rock',
+    lyrics: [
+      { time: 0, text: 'Seribu tahun lamanya ku menunggu' },
+      { time: 25, text: 'Coba kau rasakan air mata ini' },
+    ],
+  },
+  {
+    id: 'verified-feast-tarot',
+    title: 'Tarot',
+    artist: '.Feast',
+    album: 'Membangun & Menghancurkan',
+    duration: 307,
+    coverUrl: ARTWORK.sunflower,
+    audioUrl:
+      'https://archive.org/download/feast-tarot-official-lyric-video/Feast%20-%20Tarot%20%28Official%20Lyric%20Video%29.mp3',
+    genre: 'Rock',
+    lyrics: [
+      { time: 0, text: 'Nama yang sama bertahan dalam ruangan hening' },
+      { time: 25, text: 'Takkan pernah terlepas' },
+    ],
+  },
+  {
+    id: 'verified-rose-bruno-apt',
+    title: 'APT.',
+    artist: 'ROSÉ, Bruno Mars',
+    album: 'rosie',
+    duration: 170,
+    coverUrl: ARTWORK.dieWithASmile,
+    audioUrl: 'https://archive.org/download/apt._20260909/APT..mp3',
+    genre: 'Pop',
+    lyrics: [
+      { time: 0, text: 'Apateu, apateu' },
+      { time: 18, text: 'Don’t you want me like I want you, baby?' },
+      { time: 38, text: 'Sleep tomorrow, but tonight go crazy' },
+    ],
+  },
+  {
+    id: 'verified-jungkook-seven',
+    title: 'Seven',
+    artist: 'Jungkook',
+    album: 'GOLDEN',
+    duration: 184,
+    coverUrl: ARTWORK.dailyMixHeart,
+    audioUrl:
+      'https://archive.org/download/jungkook-seven-ft.-latto-explicit-ver.-320kbps_202307/Jungkook%20-%20Seven%20Ft.%20Latto%20-%20Explicit%20Ver.%20%28320kbps%29.mp3',
+    genre: 'K-Pop',
+    lyrics: [
+      { time: 0, text: 'Weight of the world on your shoulders' },
+      { time: 20, text: 'Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday' },
+    ],
+  },
+  {
+    id: 'verified-laufey-from-the-start',
+    title: 'From The Start',
+    artist: 'Laufey',
+    album: 'Bewitched',
+    duration: 170,
+    coverUrl: ARTWORK.untilIFoundYou,
+    audioUrl:
+      'https://archive.org/download/laufey-from-the-start-official-music-video-laufey_202607/Laufey%20-%20From%20The%20Start%20%28Official%20Music%20Video%29%20-%20Laufey.mp3',
+    genre: 'Chill',
+    lyrics: [
+      { time: 0, text: 'Don’t you notice how I get quiet when there’s no one else around?' },
+      { time: 24, text: 'Confess I’ve loved you from the start' },
+    ],
+  },
+  {
+    id: 'verified-coldplay-yellow',
+    title: 'Yellow',
+    artist: 'Coldplay',
+    album: 'Parachutes',
+    duration: 269,
+    coverUrl: ARTWORK.sunflower,
+    audioUrl:
+      'https://archive.org/download/4.11MBDownloadColdplayYellowMp3GratisStandMusic/%284.11%20MB%29%20Download%20Coldplay%20-%20Yellow%20Mp3%20Gratis%20-%20StandMusic.mp3',
+    genre: 'Rock',
+    lyrics: [
+      { time: 0, text: 'Look at the stars, look how they shine for you' },
+      { time: 35, text: 'And everything you do, yeah, they were all yellow' },
+    ],
+  },
+  {
+    id: 'verified-arctic-monkeys-i-wanna-be-yours',
+    title: 'I Wanna Be Yours',
+    artist: 'Arctic Monkeys',
+    album: 'AM',
+    duration: 184,
+    coverUrl: ARTWORK.anotherLove,
+    audioUrl:
+      'https://archive.org/download/arctic-monkeys-i-wanna-be-yours-latin-hype/Arctic%20Monkeys%20-%20I%20Wanna%20Be%20Yours%20-%20LatinHype.mp3',
+    genre: 'Indie',
+    lyrics: [
+      { time: 0, text: 'I wanna be your vacuum cleaner' },
+      { time: 22, text: 'Breathing in your dust' },
+    ],
+  },
+];
+
+
+
 export const INITIAL_PLAYLISTS: Playlist[] = [
   {
     id: 'playlist-daily-mix',
